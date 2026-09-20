@@ -25,10 +25,10 @@ import net.minecraftforge.event.entity.living.LivingDamageEvent;
 ^///?} else if <= 1.12 {
 /^import net.minecraftforge.fml.common.eventhandler.SubscribeEvent;
 ^///?} else if <= 1.21.5 {
-import net.minecraftforge.eventbus.api.SubscribeEvent;
-//?} else {
-/^import net.minecraftforge.eventbus.api.listener.SubscribeEvent;
-^///?}
+/^import net.minecraftforge.eventbus.api.SubscribeEvent;
+^///?} else {
+import net.minecraftforge.eventbus.api.listener.SubscribeEvent;
+//?}
 //? if > 1.9
 import net.minecraftforge.fml.common.Mod;
 

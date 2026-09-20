@@ -3,6 +3,13 @@
   "key.category.retrograde": "Retrograde",
   "gui.retrograde.chunk_map.title": "Chunk Status",
   "gui.retrograde.chunk_map.singleplayer_only": "Chunk map is singleplayer-only for now",
-  "gui.retrograde.chunk_map.legend": "%sx%s chunks \u2014 gold: you, green: touched, gray: unknown",
-  "key.category.retrograde.main": "Retrograde"
+  "gui.retrograde.chunk_map.legend": "%sx%s chunks \u2014 gold: you, green: touched, gray: unknown \u2014 click: regen, shift-click: undo",
+  "key.category.retrograde.main": "Retrograde",
+  "gui.retrograde.confirm_regen": "Regenerate chunk (%s, %s)?",
+  "gui.retrograde.confirm_undo": "Undo last regen of chunk (%s, %s)?",
+  "gui.retrograde.confirm_regen.detail": "This destroys any changes in the chunk once it reloads. Step away from it first \u2014 it won't regenerate while you're standing nearby.",
+  "gui.retrograde.regen_result.ok": "Retrograde: chunk queued \u2014 it will regenerate once it unloads",
+  "gui.retrograde.regen_result.too_close": "Retrograde: move away from that chunk first",
+  "gui.retrograde.regen_result.nothing_to_undo": "Retrograde: nothing to undo for that chunk",
+  "gui.retrograde.regen_result.io_error": "Retrograde: failed \u2014 check the log"
 }

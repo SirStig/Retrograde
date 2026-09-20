@@ -1,6 +1,8 @@
 package com.ironcoffee.retrograde.gui;
 
 import com.ironcoffee.retrograde.chunk.ChunkTracker;
+import com.ironcoffee.retrograde.regen.ChunkRegenService;
+import net.minecraft.client.gui.screens.ConfirmScreen;
 //? if <26 {
 import net.minecraft.client.gui.GuiGraphics;
 //?} else {
@@ -15,10 +17,11 @@ import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.Level;
 
 /**
- * Minimal chunk-status map: a grid of squares centered on the player,
- * color-coded TOUCHED (green) / UNKNOWN (gray). No selection, no regen —
- * that's follow-up work; this is purely the "can I see chunk state at all"
- * slice.
+ * Chunk-status map: a grid of squares centered on the player, color-coded
+ * TOUCHED (green) / UNKNOWN (gray). Clicking a non-player cell asks to
+ * regenerate that chunk; shift-click asks to undo the most recent regen
+ * instead. See ChunkRegenService for how regen actually works and why it
+ * requires the player to step away first.
  *
  * Singleplayer only for now: reads chunk status via the local integrated
  * server directly (Minecraft#getSingleplayerServer). A remote multiplayer
@@ -107,6 +110,7 @@ public class ChunkMapScreen extends Screen {
 			Component.translatable("gui.retrograde.chunk_map.legend", GRID_RADIUS_CHUNKS * 2 + 1),
 			originX, originY + gridPixelSize + 8, 0xA0A0A0);
 	}
+
 	//?} else {
 	/*@Override
 	public void extractRenderState(GuiGraphicsExtractor guiGraphics, int mouseX, int mouseY, float partialTick) {
@@ -161,6 +165,128 @@ public class ChunkMapScreen extends Screen {
 			originX, originY + gridPixelSize + 8, 0xA0A0A0);
 	}
 	*///?}
+
+	// 26.x reworked input handling end to end: mouseClicked(double, double,
+	// int) became mouseClicked(MouseButtonEvent, boolean doubleClick), and
+	// the old static Screen.hasShiftDown() moved onto the event itself
+	// (MouseButtonEvent implements InputWithModifiers, which has
+	// hasShiftDown()). Both eras funnel into the same handleClick below so
+	// the actual chunk-picking logic isn't duplicated.
+	//? if >=26 {
+	/*@Override
+	public boolean mouseClicked(net.minecraft.client.input.MouseButtonEvent event, boolean doubleClick) {
+		if (handleClick(event.x(), event.y(), event.button(), event.hasShiftDown())) {
+			return true;
+		}
+		return super.mouseClicked(event, doubleClick);
+	}
+	*///?} else {
+	@Override
+	public boolean mouseClicked(double mouseX, double mouseY, int button) {
+		if (handleClick(mouseX, mouseY, button, Screen.hasShiftDown())) {
+			return true;
+		}
+		return super.mouseClicked(mouseX, mouseY, button);
+	}
+	//?}
+
+	private boolean handleClick(double mouseX, double mouseY, int button, boolean shiftDown) {
+		MinecraftServer server = minecraft == null ? null : minecraft.getSingleplayerServer();
+		var player = minecraft == null ? null : minecraft.player;
+		if (server == null || player == null) {
+			return false;
+		}
+		ResourceKey<Level> dimension = player.level().dimension();
+		ServerLevel serverLevel = server.getLevel(dimension);
+		if (serverLevel == null) {
+			return false;
+		}
+
+		//? if >=26 {
+		/*ChunkPos centerChunk = ChunkPos.containing(player.blockPosition());
+		*///?} else {
+		ChunkPos centerChunk = new ChunkPos(player.blockPosition());
+		//?}
+		int gridPixelSize = (GRID_RADIUS_CHUNKS * 2 + 1) * CELL_SIZE;
+		int originX = (width - gridPixelSize) / 2;
+		int originY = (height - gridPixelSize) / 2;
+
+		int cellCol = (int) Math.floor((mouseX - originX) / CELL_SIZE);
+		int cellRow = (int) Math.floor((mouseY - originY) / CELL_SIZE);
+		if (cellCol < 0 || cellCol > GRID_RADIUS_CHUNKS * 2 || cellRow < 0 || cellRow > GRID_RADIUS_CHUNKS * 2) {
+			return false;
+		}
+
+		int dx = cellCol - GRID_RADIUS_CHUNKS;
+		int dz = cellRow - GRID_RADIUS_CHUNKS;
+		if (dx == 0 && dz == 0) {
+			return false;
+		}
+
+		//? if >=26 {
+		/*ChunkPos target = new ChunkPos(centerChunk.x() + dx, centerChunk.z() + dz);
+		*///?} else {
+		ChunkPos target = new ChunkPos(centerChunk.x + dx, centerChunk.z + dz);
+		//?}
+		confirmRegenAction(serverLevel, target, shiftDown);
+		return true;
+	}
+
+	private void confirmRegenAction(ServerLevel serverLevel, ChunkPos target, boolean undo) {
+		if (undo && !ChunkRegenService.hasUndo(serverLevel, target)) {
+			return;
+		}
+		String titleKey = undo ? "gui.retrograde.confirm_undo" : "gui.retrograde.confirm_regen";
+		//? if >=26 {
+		/*int targetX = target.x();
+		int targetZ = target.z();
+		*///?} else {
+		int targetX = target.x;
+		int targetZ = target.z;
+		//?}
+		openScreen(new ConfirmScreen(
+			confirmed -> {
+				if (confirmed) {
+					ChunkRegenService.Result result = undo
+						? ChunkRegenService.undo(serverLevel, target)
+						: ChunkRegenService.regenerate(serverLevel, target);
+					reportRegenResult(result);
+				}
+				openScreen(new ChunkMapScreen());
+			},
+			Component.translatable(titleKey, targetX, targetZ),
+			Component.translatable("gui.retrograde.confirm_regen.detail")
+		));
+	}
+
+	// 26.3 moved screen management off Minecraft and onto its new Gui
+	// wrapper (part of the same GLFW->SDL-era rework that moved
+	// Minecraft.screen behind minecraft.gui.screen()) - Minecraft#setScreen
+	// is gone there, replaced by minecraft.gui.setScreen(...). 26.1 still
+	// has it directly, same as 1.20.1.
+	private void openScreen(Screen screen) {
+		//? if >=26.3 {
+		/*minecraft.gui.setScreen(screen);
+		*///?} else {
+		minecraft.setScreen(screen);
+		//?}
+	}
+
+	private void reportRegenResult(ChunkRegenService.Result result) {
+		var player = minecraft.player;
+		if (player == null) return;
+		Component message = switch (result) {
+			case OK -> Component.translatable("gui.retrograde.regen_result.ok");
+			case PLAYER_TOO_CLOSE -> Component.translatable("gui.retrograde.regen_result.too_close");
+			case NOTHING_TO_UNDO -> Component.translatable("gui.retrograde.regen_result.nothing_to_undo");
+			case IO_ERROR -> Component.translatable("gui.retrograde.regen_result.io_error");
+		};
+		//? if >=26 {
+		/*player.sendOverlayMessage(message);
+		*///?} else {
+		player.displayClientMessage(message, true);
+		//?}
+	}
 
 	@Override
 	public boolean isPauseScreen() {
