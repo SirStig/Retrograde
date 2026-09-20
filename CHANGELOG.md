@@ -10,3 +10,5 @@
 - Map now renders real terrain (color per block, same approach as vanilla's held map item) instead of flat chunk-colored squares
 - Fixed chunk data always reading as "not loaded" - was being read from the client render thread instead of the server thread
 - Map keybinding is unbound by default instead of M, to avoid colliding with minimap mods
+- Map is full-screen now with drag-to-pan and scroll-to-zoom, a header bar, and a side panel with recenter/zoom/close buttons
+- Chunk rendering moved to one GPU texture per chunk instead of a fill() call per block, needed to make zoom/pan perform well

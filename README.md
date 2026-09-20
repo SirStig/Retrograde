@@ -42,27 +42,34 @@ All 6 version/loader combos build. Chunk tracking, the terrain map, the
 keybinding to open it, regen + undo, per-chunk ore info, and the Mekanism
 retrogen integration all work everywhere, including 26.3.
 
-The map renders real terrain (same color-per-block approach vanilla's held
-map item uses) with a translucent tint over touched chunks and your own
-position, chunk grid lines, and only shows chunks the server has actually
-loaded - it doesn't read unloaded chunks off disk yet, so walking closer
-fills the map in as you go.
+The map is full-screen now: drag to pan, scroll to zoom toward the cursor,
+recenter/zoom/close buttons in a right-side panel. Renders real terrain
+(same color-per-block approach vanilla's held map item uses) with a
+translucent tint over touched chunks and your own position, chunk grid
+lines, and only shows chunks the server has actually loaded - it doesn't
+read unloaded chunks off disk yet, so walking closer fills the map in as
+you go.
 
 Map controls: click a chunk to regen it (touched chunks get a stronger
 warning), shift-click to undo, ctrl-click to hand it to another mod's
-retrogen if one's installed, hover to see its ore tally. The keybinding to
-open the map is unbound by default on purpose - didn't want to guess a key
-that collides with whatever minimap mod you're probably already running.
+retrogen if one's installed, hover to see its ore tally. A click only
+counts if the mouse didn't move far enough to register as a drag. The
+keybinding to open the map is unbound by default on purpose - didn't want
+to guess a key that collides with whatever minimap mod you're probably
+already running.
 
 Not done: more retrogen integrations beyond Mekanism, multiplayer support,
-panning the map to see explored-but-unloaded terrain.
+panning to see explored-but-unloaded terrain (the map only ever reads live
+chunk data, see ROADMAP.md).
 
-This mod has now actually been run in-game for the first time, which
-surfaced a real bug (every chunk showed as unloaded - the map screen was
-reading chunk data straight off the render thread, and only the server's
-own thread can actually do that) that's fixed now. This fix itself hasn't
-been played-tested yet though, just compiled, so still worth trying in a
-world you don't care about first.
+This has been run in an actual game for real testing, not just compiled -
+that's how the original "everything shows as unloaded" bug got found and
+fixed (the map screen was reading chunk data straight off the render
+thread; only the server's own thread can actually do that), and how the
+zoom buttons got confirmed working. Drag-to-pan and scroll-to-zoom
+specifically are still unverified though - the environment I can test in
+doesn't have working mouse input, only keyboard, so those two only have
+compiling and a careful read of the code behind them.
 
 ## Credit
 
