@@ -3,7 +3,7 @@
   "key.category.retrograde": "Retrograde",
   "gui.retrograde.chunk_map.title": "Chunk Status",
   "gui.retrograde.chunk_map.singleplayer_only": "Chunk map is singleplayer-only for now",
-  "gui.retrograde.chunk_map.legend": "%sx%s chunks \u2014 gold: you, green: touched, gray: unknown \u2014 click: regen, shift-click: undo",
+  "gui.retrograde.chunk_map.legend": "%sx%s chunks \u2014 gold: you, green: touched, gray: unknown \u2014 click: regen, shift-click: undo, ctrl-click: retrogen",
   "key.category.retrograde.main": "Retrograde",
   "gui.retrograde.confirm_regen": "Regenerate chunk (%s, %s)?",
   "gui.retrograde.confirm_regen_touched": "WARNING: Regenerate TOUCHED chunk (%s, %s)?",
@@ -18,5 +18,10 @@
   "gui.retrograde.chunk_map.tooltip.touched": "Touched",
   "gui.retrograde.chunk_map.tooltip.unknown": "Unknown",
   "gui.retrograde.chunk_map.tooltip.not_loaded": "Not loaded \u2014 get closer to see resources",
-  "gui.retrograde.chunk_map.tooltip.no_ores": "No ores found"
+  "gui.retrograde.chunk_map.tooltip.no_ores": "No ores found",
+  "gui.retrograde.retrogen.title": "Retrogen chunk (%s, %s)",
+  "gui.retrograde.retrogen.none_available": "Retrograde: no loaded mods have a known retrogen integration",
+  "gui.retrograde.retrogen.confirm": "Run %s's retrogen for chunk (%s, %s)?",
+  "gui.retrograde.retrogen.confirm.detail": "This runs that mod's own retrogen command for this chunk. Retrograde doesn't control what it does from here on — check that mod's own settings if it refuses.",
+  "gui.retrograde.retrogen.dispatch_failed": "Retrograde: couldn't run %s's retrogen command — check the log"
 }

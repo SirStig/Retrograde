@@ -36,7 +36,7 @@ public class Main {
 		LOGGER.info("{}: { version: {}; friendly_name: {} }", MOD_ID, MOD_VERSION, MOD_FRIENDLY_NAME);
 	}
 
-	static Platform platform() {
+	public static Platform platform() {
 		return PLATFORM;
 	}
 

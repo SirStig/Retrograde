@@ -3,6 +3,8 @@ package com.ironcoffee.retrograde.gui;
 import com.ironcoffee.retrograde.chunk.ChunkResourceInfo;
 import com.ironcoffee.retrograde.chunk.ChunkTracker;
 import com.ironcoffee.retrograde.regen.ChunkRegenService;
+import com.ironcoffee.retrograde.retrogen.RetrogenIntegration;
+import com.ironcoffee.retrograde.retrogen.RetrogenService;
 import net.minecraft.client.gui.screens.ConfirmScreen;
 //? if <26 {
 import net.minecraft.client.gui.GuiGraphics;
@@ -244,13 +246,14 @@ public class ChunkMapScreen extends Screen {
 	}
 
 	// 26.x reworked input handling: mouseClicked(double, double, int) became
-	// mouseClicked(MouseButtonEvent, boolean), and Screen.hasShiftDown()
-	// moved onto the event (MouseButtonEvent implements InputWithModifiers).
-	// Both eras funnel into handleClick below so the picking logic isn't duplicated.
+	// mouseClicked(MouseButtonEvent, boolean), and Screen.hasShiftDown()/
+	// hasControlDown() moved onto the event (MouseButtonEvent implements
+	// InputWithModifiers). Both eras funnel into handleClick below so the
+	// picking logic isn't duplicated.
 	//? if >=26 {
 	/*@Override
 	public boolean mouseClicked(net.minecraft.client.input.MouseButtonEvent event, boolean doubleClick) {
-		if (handleClick(event.x(), event.y(), event.button(), event.hasShiftDown())) {
+		if (handleClick(event.x(), event.y(), event.button(), event.hasShiftDown(), event.hasControlDown())) {
 			return true;
 		}
 		return super.mouseClicked(event, doubleClick);
@@ -258,14 +261,14 @@ public class ChunkMapScreen extends Screen {
 	*///?} else {
 	@Override
 	public boolean mouseClicked(double mouseX, double mouseY, int button) {
-		if (handleClick(mouseX, mouseY, button, Screen.hasShiftDown())) {
+		if (handleClick(mouseX, mouseY, button, Screen.hasShiftDown(), Screen.hasControlDown())) {
 			return true;
 		}
 		return super.mouseClicked(mouseX, mouseY, button);
 	}
 	//?}
 
-	private boolean handleClick(double mouseX, double mouseY, int button, boolean shiftDown) {
+	private boolean handleClick(double mouseX, double mouseY, int button, boolean shiftDown, boolean ctrlDown) {
 		MinecraftServer server = minecraft == null ? null : minecraft.getSingleplayerServer();
 		var player = minecraft == null ? null : minecraft.player;
 		if (server == null || player == null) {
@@ -289,8 +292,29 @@ public class ChunkMapScreen extends Screen {
 		ChunkPos centerChunk = new ChunkPos(player.blockPosition());
 		ChunkPos target = new ChunkPos(centerChunk.x + hovered[0], centerChunk.z + hovered[1]);
 		//?}
-		confirmRegenAction(server, serverLevel, dimension, target, shiftDown);
+
+		if (ctrlDown) {
+			openRetrogenScreen(server, player.getUUID(), target);
+		} else {
+			confirmRegenAction(server, serverLevel, dimension, target, shiftDown);
+		}
 		return true;
+	}
+
+	private void openRetrogenScreen(MinecraftServer server, java.util.UUID playerId, ChunkPos target) {
+		List<RetrogenIntegration> integrations = RetrogenService.available();
+		if (integrations.isEmpty()) {
+			var player = minecraft.player;
+			if (player != null) {
+				//? if >=26 {
+				/*player.sendOverlayMessage(Component.translatable("gui.retrograde.retrogen.none_available"));
+				*///?} else {
+				player.displayClientMessage(Component.translatable("gui.retrograde.retrogen.none_available"), true);
+				//?}
+			}
+			return;
+		}
+		openScreen(new RetrogenScreen(this, server, playerId, target, integrations));
 	}
 
 	private void confirmRegenAction(MinecraftServer server, ServerLevel serverLevel, ResourceKey<Level> dimension, ChunkPos target, boolean undo) {

@@ -1,13 +1,14 @@
 # Retrograde
 
 Minecraft mod that tracks which chunks you've actually touched vs. chunks
-that are just sitting there unexplored, shows it on a map screen, and lets
-you regen untouched chunks (with undo) right from that screen.
+that are just sitting there unexplored, shows it on a map screen with an
+ore tally per chunk, and lets you regen a chunk (with undo) or hand it off
+to another mod's own retrogen right from that screen.
 
 Not trying to auto-detect "what's missing" for every mod out there, that's
-not something you can know without re-running world generation. The plan is
-to eventually wrap other mods' own retrogen configs into the same UI instead
-of inventing something universal.
+not something you can know without re-running world generation. Instead it
+wraps other mods' own retrogen commands (currently just Mekanism) so you
+don't have to leave the map screen to use them.
 
 ## Targets
 
@@ -36,10 +37,15 @@ a Gradle task-ordering check.
 ## Status
 
 All 6 version/loader combos build. Chunk tracking, the map screen, the
-keybinding to open it, and regen + undo all work everywhere, including 26.3.
+keybinding to open it, regen + undo, per-chunk ore info, and the Mekanism
+retrogen integration all work everywhere, including 26.3.
 
-Not done: retrogen wrapping for other mods, per-chunk resource info,
-multiplayer support (map screen is singleplayer only for now).
+Map controls: click a chunk to regen it (touched chunks get a stronger
+warning), shift-click to undo, ctrl-click to hand it to another mod's
+retrogen if one's installed, hover to see its ore tally.
+
+Not done: more retrogen integrations beyond Mekanism, multiplayer support
+(map screen is singleplayer only for now).
 
 I haven't been able to test any of this in an actual running game yet, just
 verified it all compiles. Try it in a world you don't care about first.
