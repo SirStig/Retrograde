@@ -1,0 +1,7 @@
+{
+  "key.retrograde.open_chunk_map": "Open Chunk Map",
+  "key.category.retrograde": "Retrograde",
+  "gui.retrograde.chunk_map.title": "Chunk Status",
+  "gui.retrograde.chunk_map.singleplayer_only": "Chunk map is singleplayer-only for now",
+  "gui.retrograde.chunk_map.legend": "%sx%s chunks — gold: you, green: touched, gray: unknown"
+}

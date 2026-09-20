@@ -1,0 +1,15 @@
+{
+  "package": "com.ironcoffee.retrograde.mixin",
+  "required": true,
+  "minVersion": "0.8",
+  "refmap": "${id}.mixins.refmap.json",
+  "compatibilityLevel": "${java}",
+  "injectors": {
+    "defaultRequire": 1
+  },
+  "mixins": [
+    "ExampleMixin",
+    "BlockPlaceMixin"
+  ],
+  "client": []
+}
