@@ -3,7 +3,7 @@
   "key.category.retrograde": "Retrograde",
   "gui.retrograde.chunk_map.title": "Chunk Status",
   "gui.retrograde.chunk_map.singleplayer_only": "Chunk map is singleplayer-only for now",
-  "gui.retrograde.chunk_map.legend": "%sx%s chunks \u2014 gold: you, green: touched, gray: unknown \u2014 click: regen, shift-click: undo, ctrl-click: retrogen",
+  "gui.retrograde.chunk_map.legend": "gold tint: you, green tint: touched \u2014 click: regen, shift-click: undo, ctrl-click: retrogen",
   "key.category.retrograde.main": "Retrograde",
   "gui.retrograde.confirm_regen": "Regenerate chunk (%s, %s)?",
   "gui.retrograde.confirm_regen_touched": "WARNING: Regenerate TOUCHED chunk (%s, %s)?",

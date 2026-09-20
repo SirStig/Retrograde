@@ -1,6 +1,7 @@
 package com.ironcoffee.retrograde.gui;
 
 import com.ironcoffee.retrograde.chunk.ChunkResourceInfo;
+import com.ironcoffee.retrograde.chunk.ChunkTerrainSample;
 import com.ironcoffee.retrograde.chunk.ChunkTracker;
 import com.ironcoffee.retrograde.regen.ChunkRegenService;
 import com.ironcoffee.retrograde.retrogen.RetrogenIntegration;
@@ -20,23 +21,39 @@ import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.Level;
 
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Chunk-status map: grid of squares centered on the player, color-coded
- * TOUCHED (green) / UNKNOWN (gray). Click a cell to regenerate that chunk;
- * shift-click to undo the most recent regen (see ChunkRegenService for why
- * regen needs the player to step away first). Hovering a loaded chunk shows
- * its ore tally.
+ * Real top-down chunk map: one screen pixel per block, colored the same way
+ * vanilla's own held map item colors terrain (see ChunkTerrainSample), with
+ * chunk grid lines and a translucent tint over touched/player chunks so
+ * status stays visible on top of real terrain. Click a cell to regenerate
+ * that chunk; shift-click to undo the most recent regen; ctrl-click to hand
+ * it to another mod's own retrogen if one's installed. Hovering a loaded
+ * chunk shows its ore tally.
  *
  * Regenerating a chunk with recorded player changes asks for a stronger
  * confirmation than an untouched one, this is genuinely destructive and
  * shouldn't be one click away from looking the same as a no-op.
  *
+ * Terrain and ore sampling both read live chunk data, which only
+ * ServerChunkCache#getChunkNow will actually return when called from the
+ * server's own thread; it silently returns null from any other thread,
+ * including this screen's render loop. Everything that touches chunk data
+ * goes through requestAsync below, which dispatches the read onto the
+ * server via MinecraftServer#execute and caches the result once it lands,
+ * instead of reading it straight off the render thread.
+ *
  * Singleplayer only: reads chunk status via the local integrated server.
  * A remote server would need a network round trip that doesn't exist yet.
+ * The grid only covers chunks the server has actually loaded around the
+ * player, panning to see already-explored-but-unloaded terrain would mean
+ * reading saved chunk data straight from disk instead of live chunks - not
+ * done yet.
  *
  * Two render paths: 26.x replaced Screen's render(GuiGraphics, ...) with
  * extractRenderState(GuiGraphicsExtractor, ...), a real rendering pipeline
@@ -46,15 +63,19 @@ import java.util.Map;
  * setComponentTooltipForNextFrame(...) one.
  */
 public class ChunkMapScreen extends Screen {
-	private static final int GRID_RADIUS_CHUNKS = 8; // 17x17 grid
-	private static final int CELL_SIZE = 16;
-	private static final int COLOR_UNKNOWN = 0xFF505050;
-	private static final int COLOR_TOUCHED = 0xFF3D8B3D;
-	private static final int COLOR_PLAYER = 0xFFE0C040;
-	private static final int COLOR_GRIDLINE = 0xFF202020;
+	private static final int GRID_RADIUS_CHUNKS = 6; // 13x13 chunks, one screen pixel per block
+	private static final int CELL_SIZE = ChunkTerrainSample.SIZE;
+	private static final int COLOR_UNLOADED = 0xFF303030;
+	private static final int COLOR_PENDING = 0xFF404040;
+	private static final int COLOR_TOUCHED_TINT = 0x503D8B3D;
+	private static final int COLOR_PLAYER_TINT = 0x80E0C040;
+	private static final int COLOR_GRIDLINE = 0x50000000;
 	private static final int MAX_TOOLTIP_ORES = 6;
 
-	private final Map<ChunkPos, List<ChunkResourceInfo.Entry>> resourceCache = new HashMap<>();
+	private final Map<ChunkPos, int[]> terrainCache = new ConcurrentHashMap<>();
+	private final Set<ChunkPos> pendingTerrain = ConcurrentHashMap.newKeySet();
+	private final Map<ChunkPos, Optional<List<ChunkResourceInfo.Entry>>> resourceCache = new ConcurrentHashMap<>();
+	private final Set<ChunkPos> pendingResources = ConcurrentHashMap.newKeySet();
 
 	public ChunkMapScreen() {
 		super(Component.translatable("gui.retrograde.chunk_map.title"));
@@ -102,28 +123,45 @@ public class ChunkMapScreen extends Screen {
 				ChunkPos pos = new ChunkPos(centerChunk.x + dx, centerChunk.z + dz);
 				int cellX = originX + (dx + GRID_RADIUS_CHUNKS) * CELL_SIZE;
 				int cellY = originY + (dz + GRID_RADIUS_CHUNKS) * CELL_SIZE;
-
-				boolean isPlayerChunk = dx == 0 && dz == 0;
-				int color = isPlayerChunk
-					? COLOR_PLAYER
-					: (tracker.statusOf(dimension, pos) == ChunkTracker.Status.TOUCHED ? COLOR_TOUCHED : COLOR_UNKNOWN);
-
-				guiGraphics.fill(cellX + 1, cellY + 1, cellX + CELL_SIZE - 1, cellY + CELL_SIZE - 1, color);
-				guiGraphics.fill(cellX, cellY, cellX + CELL_SIZE, cellY + 1, COLOR_GRIDLINE);
-				guiGraphics.fill(cellX, cellY, cellX + 1, cellY + CELL_SIZE, COLOR_GRIDLINE);
+				drawCell(guiGraphics, server, serverLevel, dimension, tracker, pos, cellX, cellY, dx == 0 && dz == 0);
 			}
 		}
 
 		guiGraphics.drawString(font,
-			Component.translatable("gui.retrograde.chunk_map.legend", GRID_RADIUS_CHUNKS * 2 + 1),
+			Component.translatable("gui.retrograde.chunk_map.legend"),
 			originX, originY + gridPixelSize + 8, 0xA0A0A0);
 
 		int[] hovered = hoveredCellOffset(mouseX, mouseY);
 		if (hovered != null) {
 			ChunkPos hoveredPos = new ChunkPos(centerChunk.x + hovered[0], centerChunk.z + hovered[1]);
-			List<Component> tooltip = buildTooltip(serverLevel, dimension, tracker, hoveredPos, hovered[0] == 0 && hovered[1] == 0);
+			List<Component> tooltip = buildTooltip(server, dimension, tracker, hoveredPos, hovered[0] == 0 && hovered[1] == 0);
 			guiGraphics.renderComponentTooltip(font, tooltip, mouseX, mouseY);
 		}
+	}
+
+	private void drawCell(GuiGraphics guiGraphics, MinecraftServer server, ServerLevel serverLevel, ResourceKey<Level> dimension, ChunkTracker tracker, ChunkPos pos, int cellX, int cellY, boolean isPlayerChunk) {
+		int[] terrain = requestTerrain(server, serverLevel, pos);
+		if (terrain == null) {
+			guiGraphics.fill(cellX, cellY, cellX + CELL_SIZE, cellY + CELL_SIZE, COLOR_PENDING);
+		} else if (terrain.length == 0) {
+			guiGraphics.fill(cellX, cellY, cellX + CELL_SIZE, cellY + CELL_SIZE, COLOR_UNLOADED);
+		} else {
+			for (int lz = 0; lz < CELL_SIZE; lz++) {
+				for (int lx = 0; lx < CELL_SIZE; lx++) {
+					int color = terrain[lz * CELL_SIZE + lx];
+					guiGraphics.fill(cellX + lx, cellY + lz, cellX + lx + 1, cellY + lz + 1, color);
+				}
+			}
+		}
+
+		if (isPlayerChunk) {
+			guiGraphics.fill(cellX, cellY, cellX + CELL_SIZE, cellY + CELL_SIZE, COLOR_PLAYER_TINT);
+		} else if (tracker.statusOf(dimension, pos) == ChunkTracker.Status.TOUCHED) {
+			guiGraphics.fill(cellX, cellY, cellX + CELL_SIZE, cellY + CELL_SIZE, COLOR_TOUCHED_TINT);
+		}
+
+		guiGraphics.fill(cellX, cellY, cellX + CELL_SIZE, cellY + 1, COLOR_GRIDLINE);
+		guiGraphics.fill(cellX, cellY, cellX + 1, cellY + CELL_SIZE, COLOR_GRIDLINE);
 	}
 
 	//?} else {
@@ -163,30 +201,67 @@ public class ChunkMapScreen extends Screen {
 				ChunkPos pos = new ChunkPos(centerChunk.x() + dx, centerChunk.z() + dz);
 				int cellX = originX + (dx + GRID_RADIUS_CHUNKS) * CELL_SIZE;
 				int cellY = originY + (dz + GRID_RADIUS_CHUNKS) * CELL_SIZE;
-
-				boolean isPlayerChunk = dx == 0 && dz == 0;
-				int color = isPlayerChunk
-					? COLOR_PLAYER
-					: (tracker.statusOf(dimension, pos) == ChunkTracker.Status.TOUCHED ? COLOR_TOUCHED : COLOR_UNKNOWN);
-
-				guiGraphics.fill(cellX + 1, cellY + 1, cellX + CELL_SIZE - 1, cellY + CELL_SIZE - 1, color);
-				guiGraphics.fill(cellX, cellY, cellX + CELL_SIZE, cellY + 1, COLOR_GRIDLINE);
-				guiGraphics.fill(cellX, cellY, cellX + 1, cellY + CELL_SIZE, COLOR_GRIDLINE);
+				drawCell(guiGraphics, server, serverLevel, dimension, tracker, pos, cellX, cellY, dx == 0 && dz == 0);
 			}
 		}
 
 		guiGraphics.text(font,
-			Component.translatable("gui.retrograde.chunk_map.legend", GRID_RADIUS_CHUNKS * 2 + 1),
+			Component.translatable("gui.retrograde.chunk_map.legend"),
 			originX, originY + gridPixelSize + 8, 0xA0A0A0);
 
 		int[] hovered = hoveredCellOffset(mouseX, mouseY);
 		if (hovered != null) {
 			ChunkPos hoveredPos = new ChunkPos(centerChunk.x() + hovered[0], centerChunk.z() + hovered[1]);
-			List<Component> tooltip = buildTooltip(serverLevel, dimension, tracker, hoveredPos, hovered[0] == 0 && hovered[1] == 0);
+			List<Component> tooltip = buildTooltip(server, dimension, tracker, hoveredPos, hovered[0] == 0 && hovered[1] == 0);
 			guiGraphics.setComponentTooltipForNextFrame(font, tooltip, mouseX, mouseY);
 		}
 	}
+
+	private void drawCell(GuiGraphicsExtractor guiGraphics, MinecraftServer server, ServerLevel serverLevel, ResourceKey<Level> dimension, ChunkTracker tracker, ChunkPos pos, int cellX, int cellY, boolean isPlayerChunk) {
+		int[] terrain = requestTerrain(server, serverLevel, pos);
+		if (terrain == null) {
+			guiGraphics.fill(cellX, cellY, cellX + CELL_SIZE, cellY + CELL_SIZE, COLOR_PENDING);
+		} else if (terrain.length == 0) {
+			guiGraphics.fill(cellX, cellY, cellX + CELL_SIZE, cellY + CELL_SIZE, COLOR_UNLOADED);
+		} else {
+			for (int lz = 0; lz < CELL_SIZE; lz++) {
+				for (int lx = 0; lx < CELL_SIZE; lx++) {
+					int color = terrain[lz * CELL_SIZE + lx];
+					guiGraphics.fill(cellX + lx, cellY + lz, cellX + lx + 1, cellY + lz + 1, color);
+				}
+			}
+		}
+
+		if (isPlayerChunk) {
+			guiGraphics.fill(cellX, cellY, cellX + CELL_SIZE, cellY + CELL_SIZE, COLOR_PLAYER_TINT);
+		} else if (tracker.statusOf(dimension, pos) == ChunkTracker.Status.TOUCHED) {
+			guiGraphics.fill(cellX, cellY, cellX + CELL_SIZE, cellY + CELL_SIZE, COLOR_TOUCHED_TINT);
+		}
+
+		guiGraphics.fill(cellX, cellY, cellX + CELL_SIZE, cellY + 1, COLOR_GRIDLINE);
+		guiGraphics.fill(cellX, cellY, cellX + 1, cellY + CELL_SIZE, COLOR_GRIDLINE);
+	}
 	*///?}
+
+	/**
+	 * Cached 16x16 ARGB sample for this chunk: null if not requested yet
+	 * (and a request has just been kicked off), zero-length if the server
+	 * has confirmed the chunk isn't loaded, or the real sample otherwise.
+	 */
+	private int[] requestTerrain(MinecraftServer server, ServerLevel serverLevel, ChunkPos pos) {
+		int[] cached = terrainCache.get(pos);
+		if (cached != null) {
+			return cached;
+		}
+		if (pendingTerrain.add(pos)) {
+			server.execute(() -> {
+				int[] result = ChunkTerrainSample.sample(serverLevel, pos);
+				terrainCache.put(pos, result == null ? new int[0] : result);
+				pendingTerrain.remove(pos);
+			});
+		}
+		return null;
+	}
 
 	/** Grid offset {dx, dz} from the player's chunk under the cursor, or null if outside the grid. */
 	private int[] hoveredCellOffset(int mouseX, int mouseY) {
@@ -202,7 +277,7 @@ public class ChunkMapScreen extends Screen {
 		return new int[] { cellCol - GRID_RADIUS_CHUNKS, cellRow - GRID_RADIUS_CHUNKS };
 	}
 
-	private List<Component> buildTooltip(ServerLevel serverLevel, ResourceKey<Level> dimension, ChunkTracker tracker, ChunkPos pos, boolean isPlayerChunk) {
+	private List<Component> buildTooltip(MinecraftServer server, ResourceKey<Level> dimension, ChunkTracker tracker, ChunkPos pos, boolean isPlayerChunk) {
 		List<Component> lines = new ArrayList<>();
 		lines.add(Component.literal("(" + chunkX(pos) + ", " + chunkZ(pos) + ")"));
 		if (isPlayerChunk) {
@@ -214,12 +289,15 @@ public class ChunkMapScreen extends Screen {
 				: "gui.retrograde.chunk_map.tooltip.unknown"));
 		}
 
-		List<ChunkResourceInfo.Entry> resources = resourceCache.computeIfAbsent(pos, p -> ChunkResourceInfo.scan(serverLevel.getChunkSource(), p));
-		if (resources == null) {
+		Optional<List<ChunkResourceInfo.Entry>> cached = requestResources(server, dimension, pos);
+		if (cached == null) {
 			lines.add(Component.translatable("gui.retrograde.chunk_map.tooltip.not_loaded"));
-		} else if (resources.isEmpty()) {
+		} else if (cached.isEmpty()) {
+			lines.add(Component.translatable("gui.retrograde.chunk_map.tooltip.not_loaded"));
+		} else if (cached.get().isEmpty()) {
 			lines.add(Component.translatable("gui.retrograde.chunk_map.tooltip.no_ores"));
 		} else {
+			List<ChunkResourceInfo.Entry> resources = cached.get();
 			int shown = Math.min(resources.size(), MAX_TOOLTIP_ORES);
 			for (int i = 0; i < shown; i++) {
 				ChunkResourceInfo.Entry entry = resources.get(i);
@@ -227,6 +305,23 @@ public class ChunkMapScreen extends Screen {
 			}
 		}
 		return lines;
+	}
+
+	/** Same not-yet-known vs. confirmed-empty distinction as requestTerrain, wrapped in Optional since the resolved value can itself be null (chunk not loaded). */
+	private Optional<List<ChunkResourceInfo.Entry>> requestResources(MinecraftServer server, ResourceKey<Level> dimension, ChunkPos pos) {
+		Optional<List<ChunkResourceInfo.Entry>> cached = resourceCache.get(pos);
+		if (cached != null) {
+			return cached;
+		}
+		if (pendingResources.add(pos)) {
+			server.execute(() -> {
+				ServerLevel serverLevel = server.getLevel(dimension);
+				List<ChunkResourceInfo.Entry> result = serverLevel == null ? null : ChunkResourceInfo.scan(serverLevel.getChunkSource(), pos);
+				resourceCache.put(pos, Optional.ofNullable(result));
+				pendingResources.remove(pos);
+			});
+		}
+		return null;
 	}
 
 	private static int chunkX(ChunkPos pos) {

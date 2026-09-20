@@ -51,22 +51,22 @@ public class ForgePlatform implements Platform {
 	public boolean isModLoaded(String modId) {
 		try {
 			//? if <= 1.21.11 {
-			/^if (LoadingModList.get() != null) {
+			if (LoadingModList.get() != null) {
 				return LoadingModList.get().getModFileById(modId) != null;
 			}
-			^///?} else {
-			return LoadingModList.getModFileById(modId) != null;
-			//?}
+			//?} else {
+			/^return LoadingModList.getModFileById(modId) != null;
+			^///?}
 		} catch (Throwable ignored) {}
 
 		try {
 			//? if <= 1.21.11 {
-			/^if (ModList.get() != null) {
+			if (ModList.get() != null) {
 				return ModList.get().isLoaded(modId);
 			}
-			^///?} else {
-			return ModList.isLoaded(modId);
-			//?}
+			//?} else {
+			/^return ModList.isLoaded(modId);
+			^///?}
 		} catch (Throwable ignored) {}
 		return false;
 	}

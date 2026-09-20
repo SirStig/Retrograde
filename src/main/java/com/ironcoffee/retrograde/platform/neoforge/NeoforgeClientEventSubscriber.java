@@ -15,9 +15,6 @@ import net.neoforged.neoforge.client.event.ClientTickEvent;
 import net.neoforged.neoforge.client.event.RegisterKeyMappingsEvent;
 import net.neoforged.neoforge.client.settings.KeyConflictContext;
 import net.neoforged.neoforge.common.NeoForge;
-//? if <26.3 {
-import org.lwjgl.glfw.GLFW;
-//?}
 //? if <= 1.20.3 {
 import net.neoforged.fml.common.Mod;
 //?} else {
@@ -42,16 +39,19 @@ public class NeoforgeClientEventSubscriber {
 		// that helper is deprecated in favor of this event on NeoForge.
 		var category = new KeyMapping.Category(ResourceLocation.fromNamespaceAndPath(Main.MOD_ID, "main"));
 		event.registerCategory(category);
+		// Unbound by default rather than picking a key ourselves - "M" is
+		// exactly the kind of key a minimap mod is likely to already own,
+		// and this mod has no way to know what else is installed. Player
+		// sets it themselves in Controls if they want it.
 		openChunkMapKey = new KeyMapping(
 			"key.retrograde.open_chunk_map",
 			KeyConflictContext.IN_GAME,
 			//? if <26.3 {
 			InputConstants.Type.KEYSYM,
-			GLFW.GLFW_KEY_M,
 			//?} else {
 			/^InputConstants.Type.KEYBOARD,
-			InputConstants.KEY_M,
 			^///?}
+			InputConstants.UNKNOWN.getValue(),
 			category
 		);
 		event.register(openChunkMapKey);

@@ -19,11 +19,10 @@ import net.minecraftforge.event.TickEvent;
 import net.minecraftforge.fml.common.Mod;
 import net.minecraftforge.fml.event.lifecycle.FMLClientSetupEvent;
 //? if <= 1.21.5 {
-/^import net.minecraftforge.eventbus.api.SubscribeEvent;
-^///?} else {
-import net.minecraftforge.eventbus.api.listener.SubscribeEvent;
- //?}
-import org.lwjgl.glfw.GLFW;
+import net.minecraftforge.eventbus.api.SubscribeEvent;
+//?} else {
+/^import net.minecraftforge.eventbus.api.listener.SubscribeEvent;
+ ^///?}
 
 @Mod.EventBusSubscriber(modid = Main.MOD_ID, value = Dist.CLIENT, bus = Mod.EventBusSubscriber.Bus.MOD)
 public class ForgeClientEventSubscriber {
@@ -32,11 +31,15 @@ public class ForgeClientEventSubscriber {
 
 	@SubscribeEvent
 	public static void onRegisterKeyMappings(RegisterKeyMappingsEvent event) {
+		// Unbound by default rather than picking a key ourselves - "M" is
+		// exactly the kind of key a minimap mod is likely to already own,
+		// and this mod has no way to know what else is installed. Player
+		// sets it themselves in Controls if they want it.
 		openChunkMapKey = new KeyMapping(
 			"key.retrograde.open_chunk_map",
 			KeyConflictContext.IN_GAME,
 			InputConstants.Type.KEYSYM,
-			GLFW.GLFW_KEY_M,
+			InputConstants.UNKNOWN.getValue(),
 			"key.category.retrograde"
 		);
 		event.register(openChunkMapKey);

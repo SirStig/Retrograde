@@ -15,9 +15,6 @@ import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
 /*import net.fabricmc.fabric.api.client.keymapping.v1.KeyMappingHelper;
 import net.minecraft.resources.ResourceLocation;
 *///?}
-//? if <26.3 {
-import org.lwjgl.glfw.GLFW;
-//?}
 
 @Entrypoint("client")
 public class FabricClientEntrypoint implements ClientModInitializer {
@@ -39,15 +36,17 @@ public class FabricClientEntrypoint implements ClientModInitializer {
 		// that's NeoForge-specific; it's still the right call on plain Fabric.
 		//
 		// 26.3 also swapped GLFW for SDL for windowing/input, which retired
-		// InputConstants.Type.KEYSYM in favor of KEYBOARD. The key constant
-		// itself didn't need to change though: InputConstants.KEY_M is its
-		// own abstraction over the GLFW/SDL keycode, not a raw GLFW value,
-		// so the same constant works on both sides of that split.
+		// InputConstants.Type.KEYSYM in favor of KEYBOARD.
+		//
+		// Unbound by default rather than picking a key ourselves - "M" is
+		// exactly the kind of key a minimap mod is likely to already own,
+		// and this mod has no way to know what else is installed. Player
+		// sets it themselves in Controls if they want it.
 		//? if <26 {
 		openChunkMapKey = KeyBindingHelper.registerKeyBinding(new KeyMapping(
 			"key.retrograde.open_chunk_map",
 			InputConstants.Type.KEYSYM,
-			GLFW.GLFW_KEY_M,
+			InputConstants.UNKNOWN.getValue(),
 			"key.category.retrograde"
 		));
 		//?} else {
@@ -57,11 +56,10 @@ public class FabricClientEntrypoint implements ClientModInitializer {
 			"key.retrograde.open_chunk_map",
 			//? if <26.3 {
 			InputConstants.Type.KEYSYM,
-			GLFW.GLFW_KEY_M,
 			//?} else {
 			/^InputConstants.Type.KEYBOARD,
-			InputConstants.KEY_M,
 			^///?}
+			InputConstants.UNKNOWN.getValue(),
 			category
 		));
 		*///?}
