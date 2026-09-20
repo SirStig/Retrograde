@@ -35,11 +35,8 @@ a Gradle task-ordering check.
 
 ## Status
 
-All 6 version/loader combos build. Chunk tracking, the map screen, and
-regen + undo work everywhere. Regen only opens from a click on the map
-right now, no keybinding to jump straight to it, and on 26.3 there's no
-keybinding to open the map at all yet since that version swapped GLFW for
-SDL and I haven't sorted out the new key constants.
+All 6 version/loader combos build. Chunk tracking, the map screen, the
+keybinding to open it, and regen + undo all work everywhere, including 26.3.
 
 Not done: retrogen wrapping for other mods, per-chunk resource info,
 multiplayer support (map screen is singleplayer only for now).

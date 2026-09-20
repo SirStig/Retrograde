@@ -3,28 +3,26 @@ package com.ironcoffee.retrograde.platform.fabric;
 //? fabric {
 
 import com.ironcoffee.retrograde.Main;
-import dev.kikugie.fletching_table.annotation.fabric.Entrypoint;
-import net.fabricmc.api.ClientModInitializer;
-//? if <26.3 {
 import com.ironcoffee.retrograde.gui.ChunkMapScreen;
 import com.mojang.blaze3d.platform.InputConstants;
+import dev.kikugie.fletching_table.annotation.fabric.Entrypoint;
+import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.minecraft.client.KeyMapping;
-import org.lwjgl.glfw.GLFW;
-//?}
 //? if <26 {
 import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
-//?} else if <26.3 {
+//?} else {
 /*import net.fabricmc.fabric.api.client.keymapping.v1.KeyMappingHelper;
 import net.minecraft.resources.ResourceLocation;
 *///?}
+//? if <26.3 {
+import org.lwjgl.glfw.GLFW;
+//?}
 
 @Entrypoint("client")
 public class FabricClientEntrypoint implements ClientModInitializer {
 
-	//? if <26.3 {
 	private static KeyMapping openChunkMapKey;
-	//?}
 
 	@Override
 	public void onInitializeClient() {
@@ -40,11 +38,11 @@ public class FabricClientEntrypoint implements ClientModInitializer {
 		// @deprecated in favor of NeoForge's RegisterKeyMappingsEvent, but
 		// that's NeoForge-specific; it's still the right call on plain Fabric.
 		//
-		// >=26.3 has no keybinding (or the map screen it would open) yet:
-		// Minecraft swapped GLFW for SDL for windowing/input in that version.
-		// InputConstants.Type.KEYSYM is gone, replaced by KEYBOARD backed by
-		// SDL scancodes, which don't share GLFW's numbering, so the old key
-		// constant can't just be reused as-is.
+		// 26.3 also swapped GLFW for SDL for windowing/input, which retired
+		// InputConstants.Type.KEYSYM in favor of KEYBOARD. The key constant
+		// itself didn't need to change though: InputConstants.KEY_M is its
+		// own abstraction over the GLFW/SDL keycode, not a raw GLFW value,
+		// so the same constant works on both sides of that split.
 		//? if <26 {
 		openChunkMapKey = KeyBindingHelper.registerKeyBinding(new KeyMapping(
 			"key.retrograde.open_chunk_map",
@@ -52,26 +50,35 @@ public class FabricClientEntrypoint implements ClientModInitializer {
 			GLFW.GLFW_KEY_M,
 			"key.category.retrograde"
 		));
-		//?} else if <26.3 {
+		//?} else {
 		/*KeyMapping.Category category = KeyMapping.Category.register(
 			ResourceLocation.fromNamespaceAndPath(Main.MOD_ID, "main"));
 		openChunkMapKey = KeyMappingHelper.registerKeyMapping(new KeyMapping(
 			"key.retrograde.open_chunk_map",
+			//? if <26.3 {
 			InputConstants.Type.KEYSYM,
 			GLFW.GLFW_KEY_M,
+			//?} else {
+			/^InputConstants.Type.KEYBOARD,
+			InputConstants.KEY_M,
+			^///?}
 			category
 		));
 		*///?}
 
-		//? if <26.3 {
 		ClientTickEvents.END_CLIENT_TICK.register(client -> {
 			while (openChunkMapKey.consumeClick()) {
+				//? if <26.3 {
 				if (client.player != null && client.screen == null) {
 					client.setScreen(new ChunkMapScreen());
 				}
+				//?} else {
+				/*if (client.player != null && client.gui.screen() == null) {
+					client.gui.setScreen(new ChunkMapScreen());
+				}
+				*///?}
 			}
 		});
-		//?}
 	}
 
 }

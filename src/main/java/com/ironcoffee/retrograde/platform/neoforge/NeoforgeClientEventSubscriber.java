@@ -4,18 +4,18 @@ package com.ironcoffee.retrograde.platform.neoforge;
 
 /*import com.ironcoffee.retrograde.Main;
 import com.ironcoffee.retrograde.gui.ChunkMapScreen;
+import com.mojang.blaze3d.platform.InputConstants;
 import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
+import net.minecraft.resources.ResourceLocation;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.event.lifecycle.FMLClientSetupEvent;
-//? if <26.3 {
-import com.mojang.blaze3d.platform.InputConstants;
-import net.minecraft.resources.ResourceLocation;
 import net.neoforged.neoforge.client.event.ClientTickEvent;
 import net.neoforged.neoforge.client.event.RegisterKeyMappingsEvent;
 import net.neoforged.neoforge.client.settings.KeyConflictContext;
 import net.neoforged.neoforge.common.NeoForge;
+//? if <26.3 {
 import org.lwjgl.glfw.GLFW;
 //?}
 //? if <= 1.20.3 {
@@ -33,7 +33,6 @@ import net.neoforged.fml.common.Mod;
 ^///?}
 public class NeoforgeClientEventSubscriber {
 
-	//? if <26.3 {
 	private static KeyMapping openChunkMapKey;
 
 	@SubscribeEvent
@@ -46,8 +45,13 @@ public class NeoforgeClientEventSubscriber {
 		openChunkMapKey = new KeyMapping(
 			"key.retrograde.open_chunk_map",
 			KeyConflictContext.IN_GAME,
+			//? if <26.3 {
 			InputConstants.Type.KEYSYM,
 			GLFW.GLFW_KEY_M,
+			//?} else {
+			/^InputConstants.Type.KEYBOARD,
+			InputConstants.KEY_M,
+			^///?}
 			category
 		);
 		event.register(openChunkMapKey);
@@ -61,12 +65,17 @@ public class NeoforgeClientEventSubscriber {
 	private static void onClientTick(ClientTickEvent.Post event) {
 		Minecraft client = Minecraft.getInstance();
 		while (openChunkMapKey.consumeClick()) {
+			//? if <26.3 {
 			if (client.player != null && client.screen == null) {
 				client.setScreen(new ChunkMapScreen());
 			}
+			//?} else {
+			/^if (client.player != null && client.gui.screen() == null) {
+				client.gui.setScreen(new ChunkMapScreen());
+			}
+			^///?}
 		}
 	}
-	//?}
 
 	@SubscribeEvent
 	public static void onClientSetup(final FMLClientSetupEvent event) {
