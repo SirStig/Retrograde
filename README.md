@@ -1,5 +1,7 @@
 # Retrograde
 
+![Retrograde](docs/assets/banner.png)
+
 Minecraft mod that tracks which chunks you've actually touched vs. chunks
 that are just sitting there unexplored, shows a real top-down terrain map
 with an ore tally per chunk, and lets you regen a chunk (with undo) or hand
