@@ -11,8 +11,31 @@ plugins {
 // needs Renamer Gradle's reobf step to work outside the dev environment —
 // ForgeGradle 7 warns (legacy-missing-renamer) without it. Newer Forge
 // (>=1.20.5) uses official Mojang names directly and doesn't need this.
+//
+// enableMixinRefmaps is the other half of this: applying the plugin alone
+// only fixes the packaged-jar warning. The Mixin annotation processor
+// itself still needs Renamer wired in to resolve obfuscation mappings for
+// @Inject targets at compile time — without it, compiling any mixin that
+// targets a real (non-constructor) vanilla method fails with "Unable to
+// locate obfuscation mapping for @Inject target <method>" even though the
+// plugin is applied.
 if (stonecutter.eval(stonecutter.current.version, "<1.20.5")) {
 	apply(plugin = "net.minecraftforge.renamer")
+	configure<net.minecraftforge.renamer.gradle.RenamerExtension> {
+		// ForgeGradle 7 already fetches the official<->obfuscated SRG mapping
+		// data Renamer needs into its own local "mavenizer" repo as part of
+		// resolving the `minecraft { mappings("official", ...) }` call above
+		// — it's just never wired into Renamer automatically. Referenced by
+		// glob rather than the exact (timestamp-suffixed) coordinate since
+		// that timestamp isn't ours to predict and can change whenever
+		// Forge republishes mapping data.
+		setMappings(rootProject.fileTree(".gradle/mavenizer/repo/net/minecraft/mappings_official") {
+			include("**/*-map2obf.tsrg.gz")
+		})
+		enableMixinRefmaps {
+			source(sourceSets["main"])
+		}
+	}
 }
 
 fun prop(key: String) = project.property(key) as String
