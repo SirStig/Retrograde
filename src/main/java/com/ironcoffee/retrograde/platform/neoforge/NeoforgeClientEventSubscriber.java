@@ -38,10 +38,9 @@ public class NeoforgeClientEventSubscriber {
 
 	@SubscribeEvent
 	public static void onRegisterKeyMappings(RegisterKeyMappingsEvent event) {
-		// NeoForge's own recommended path (RegisterKeyMappingsEvent) rather
-		// than the vanilla KeyMapping.Category.register(ResourceLocation) helper
-		// Fabric uses — that helper is explicitly marked @deprecated in
-		// favor of this event for NeoForge mods specifically.
+		// Use NeoForge's RegisterKeyMappingsEvent instead of the vanilla
+		// KeyMapping.Category.register(ResourceLocation) helper Fabric uses;
+		// that helper is deprecated in favor of this event on NeoForge.
 		var category = new KeyMapping.Category(ResourceLocation.fromNamespaceAndPath(Main.MOD_ID, "main"));
 		event.registerCategory(category);
 		openChunkMapKey = new KeyMapping(
@@ -54,9 +53,8 @@ public class NeoforgeClientEventSubscriber {
 		event.register(openChunkMapKey);
 
 		// Tick events live on NeoForge's general event bus, not the MOD bus
-		// this class's other handler (client setup) is scoped to — register
-		// this one manually rather than fighting the class-level bus
-		// annotation for a single listener.
+		// this class is scoped to, so register this one manually instead of
+		// fighting the class-level bus annotation for one listener.
 		NeoForge.EVENT_BUS.addListener(NeoforgeClientEventSubscriber::onClientTick);
 	}
 

@@ -18,15 +18,13 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 /**
  * Marks a chunk TOUCHED when a player places a block in it. Fabric API has
- * no built-in "block placed" event (only break/attack/use callbacks — see
- * net.fabricmc.fabric.api.event.player), so this hooks the vanilla
- * BlockItem#place implementation directly instead — loader-agnostic once
- * mixed in, and the same method every block item's placement funnels
- * through regardless of survival/creative or which loader is running.
+ * no "block placed" event (only break/attack/use callbacks, see
+ * net.fabricmc.fabric.api.event.player), so this hooks BlockItem#place
+ * directly instead, the one method every block item's placement funnels
+ * through regardless of game mode or loader.
  *
  * Breaking is handled separately via Fabric's PlayerBlockBreakEvents.AFTER
- * (see FabricEventSubscriber) since that event already exists cleanly —
- * no mixin needed for that side.
+ * (see FabricEventSubscriber), which needs no mixin.
  */
 @Mixin(BlockItem.class)
 @MixinEnvironment(type = MixinEnvironment.Env.MAIN)
@@ -39,8 +37,7 @@ public class BlockPlaceMixin {
 		}
 		Player player = context.getPlayer();
 		if (player == null) {
-			// Placed by something other than a player (e.g. a dispenser) —
-			// not a player action, so it doesn't count as "touched" by them.
+			// Not placed by a player (e.g. a dispenser), so it doesn't count as touched.
 			return;
 		}
 		Level level = context.getLevel();

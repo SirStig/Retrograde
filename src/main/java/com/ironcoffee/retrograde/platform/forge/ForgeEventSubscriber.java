@@ -40,9 +40,8 @@ import net.minecraftforge.fml.common.Mod;
 //?}
 public class ForgeEventSubscriber {
 
-	// Both fire before the change is applied and are cancellable — check
-	// isCanceled() (defaults false if nothing cancelled it) so a chunk only
-	// gets marked touched if the break/place is actually going through.
+	// Both events fire before the change is applied and can be cancelled,
+	// so check isCanceled() before marking the chunk touched.
 	@SubscribeEvent
 	public static void onBlockBreak(BlockEvent.BreakEvent event) {
 		if (event.isCanceled()) return;

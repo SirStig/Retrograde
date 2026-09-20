@@ -21,17 +21,16 @@ import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Tracks which chunks have been player-modified ("touched") since this mod
- * was installed, per dimension. A chunk this tracker has never recorded is
- * UNKNOWN, not "untouched" — there's no way to know a chunk's history from
- * before the mod was installed, so the tracker never claims otherwise.
+ * was installed, per dimension. A chunk the tracker has never recorded is
+ * UNKNOWN, not "untouched": there's no way to know a chunk's history from
+ * before the mod was installed.
  *
  * Storage is a plain append-only text file per dimension under the world
- * save directory ("<world>/retrograde/<dimension>.chunks", one "x,z" per
- * line), not Minecraft's SavedData/PersistentState system — that API has
- * shifted enough across the versions this mod targets that a small flat
- * file we own outright is simpler than chasing it per version. Append-only
- * because a touched chunk only ever needs writing once (idempotent) and an
- * interrupted write can't corrupt previously-recorded lines.
+ * save dir ("<world>/retrograde/<dimension>.chunks", one "x,z" per line),
+ * instead of Minecraft's SavedData/PersistentState system, since that API
+ * has shifted too much across supported versions to chase. Append-only
+ * because a touched chunk only needs writing once, and an interrupted
+ * write can't corrupt lines already recorded.
  */
 public final class ChunkTracker {
 	public enum Status {
@@ -60,8 +59,8 @@ public final class ChunkTracker {
 		}
 	}
 
-	// ChunkPos#toLong() was renamed to #pack() in 26.x (alongside ChunkPos
-	// becoming a record) — bridge both names to one call site.
+	// ChunkPos#toLong() was renamed to #pack() in 26.x, alongside ChunkPos
+	// becoming a record. Bridge both names to one call site.
 	private static long packed(ChunkPos pos) {
 		//? if >=26 {
 		/*return pos.pack();
@@ -107,8 +106,8 @@ public final class ChunkTracker {
 						result.add(ChunkPos.asLong(x, z));
 						//?}
 					} catch (NumberFormatException ignored) {
-						// Skip a malformed line (e.g. truncated by a crash mid-write)
-						// rather than fail loading the whole dimension over it.
+						// Skip malformed lines (e.g. truncated by a crash mid-write)
+						// instead of failing the whole dimension load.
 					}
 				}
 			} catch (IOException e) {

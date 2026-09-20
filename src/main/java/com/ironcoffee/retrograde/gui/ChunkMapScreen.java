@@ -17,28 +17,18 @@ import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.Level;
 
 /**
- * Chunk-status map: a grid of squares centered on the player, color-coded
- * TOUCHED (green) / UNKNOWN (gray). Clicking a non-player cell asks to
- * regenerate that chunk; shift-click asks to undo the most recent regen
- * instead. See ChunkRegenService for how regen actually works and why it
- * requires the player to step away first.
+ * Chunk-status map: grid of squares centered on the player, color-coded
+ * TOUCHED (green) / UNKNOWN (gray). Click a cell to regenerate that chunk;
+ * shift-click to undo the most recent regen (see ChunkRegenService for why
+ * regen needs the player to step away first).
  *
- * Singleplayer only for now: reads chunk status via the local integrated
- * server directly (Minecraft#getSingleplayerServer). A remote multiplayer
- * server has no such local access — the client would need to ask the
- * server over the network for this, which doesn't exist yet.
+ * Singleplayer only: reads chunk status via the local integrated server.
+ * A remote server would need a network round trip that doesn't exist yet.
  *
- * Two rendering implementations: 26.x replaced Screen's
- * render(GuiGraphics, int, int, float) with an
- * extractRenderState(GuiGraphicsExtractor, int, int, float)-based pipeline —
- * a real "retained mode" rendering redesign, not a simple rename (see
- * GuiGraphicsExtractor's own source: dozens of *RenderState classes backing
- * it). The primitives this screen actually needs turned out to map closely
- * though, once traced through the real 26.1 decompiled source rather than
- * guessed: fill(...) kept its exact signature, drawCenteredString/drawString
- * became centeredText/text (same parameter meaning, Font passed explicitly),
- * and Screen.extractRenderState(...) is the direct override point,
- * mirroring the old render(...) override including calling super first.
+ * Two render paths: 26.x replaced Screen's render(GuiGraphics, ...) with
+ * extractRenderState(GuiGraphicsExtractor, ...), a real rendering pipeline
+ * change, not a rename. fill(...) kept its signature; drawCenteredString /
+ * drawString became centeredText / text.
  */
 public class ChunkMapScreen extends Screen {
 	private static final int GRID_RADIUS_CHUNKS = 8; // 17x17 grid
@@ -166,12 +156,10 @@ public class ChunkMapScreen extends Screen {
 	}
 	*///?}
 
-	// 26.x reworked input handling end to end: mouseClicked(double, double,
-	// int) became mouseClicked(MouseButtonEvent, boolean doubleClick), and
-	// the old static Screen.hasShiftDown() moved onto the event itself
-	// (MouseButtonEvent implements InputWithModifiers, which has
-	// hasShiftDown()). Both eras funnel into the same handleClick below so
-	// the actual chunk-picking logic isn't duplicated.
+	// 26.x reworked input handling: mouseClicked(double, double, int) became
+	// mouseClicked(MouseButtonEvent, boolean), and Screen.hasShiftDown()
+	// moved onto the event (MouseButtonEvent implements InputWithModifiers).
+	// Both eras funnel into handleClick below so the picking logic isn't duplicated.
 	//? if >=26 {
 	/*@Override
 	public boolean mouseClicked(net.minecraft.client.input.MouseButtonEvent event, boolean doubleClick) {
@@ -259,11 +247,9 @@ public class ChunkMapScreen extends Screen {
 		));
 	}
 
-	// 26.3 moved screen management off Minecraft and onto its new Gui
-	// wrapper (part of the same GLFW->SDL-era rework that moved
-	// Minecraft.screen behind minecraft.gui.screen()) - Minecraft#setScreen
-	// is gone there, replaced by minecraft.gui.setScreen(...). 26.1 still
-	// has it directly, same as 1.20.1.
+	// 26.3 moved screen management off Minecraft onto its new Gui wrapper:
+	// Minecraft#setScreen is gone, replaced by minecraft.gui.setScreen(...).
+	// 26.1 still has it directly, same as 1.20.1.
 	private void openScreen(Screen screen) {
 		//? if >=26.3 {
 		/*minecraft.gui.setScreen(screen);

@@ -1,13 +1,13 @@
 # Retrograde
 
-Tracks which Minecraft chunks have been player-modified vs. left untouched
-since this mod was installed, shows it on a map screen, and lets you
-regen (untouched chunks, with undo) or retrogen (wraps each other installed
-mod's own native retrogen config into one place) from there.
+Minecraft mod that tracks which chunks you've actually touched vs. chunks
+that are just sitting there unexplored, shows it on a map screen, and lets
+you regen untouched chunks (with undo) right from that screen.
 
-Not a universal "auto-detect what's missing for any mod" tool — that isn't
-reliably knowable without re-simulating generation. See the project plan
-for the full design rationale.
+Not trying to auto-detect "what's missing" for every mod out there, that's
+not something you can know without re-running world generation. The plan is
+to eventually wrap other mods' own retrogen configs into the same UI instead
+of inventing something universal.
 
 ## Targets
 
@@ -15,36 +15,39 @@ for the full design rationale.
 |---|---|
 | 1.20.1 | Fabric, Forge |
 | 26.1 | Fabric, NeoForge |
-| 26.3 | Fabric, NeoForge (NeoForge is beta-only for 26.3 as of this writing) |
+| 26.3 | Fabric, NeoForge (NeoForge is still beta for 26.3) |
 
-NeoForge doesn't exist for 1.20.1 — the Forge/NeoForge split happened at
-1.20.2 — so 1.20.1 pairs with plain Forge instead.
+1.20.1 pairs with Forge instead of NeoForge since the Forge/NeoForge split
+didn't happen until 1.20.2.
 
 ## Building
 
-This is a [Stonecutter](https://stonecutter.kikugie.dev/) multi-version,
-multi-loader project. Only one version's source is "active" (uncommented) in
-`src/` at a time — switch before building a different target:
+Stonecutter project, so only one version's source tree is active at a time.
+Switch before building:
 
 ```
 ./gradlew "Set active project to <version>-<loader>"   # e.g. 1.20.1-fabric
 ./gradlew :<version>-<loader>:build
 ```
 
-Running the switch and the build in the same Gradle invocation can hit a
-task-ordering validation error — keep them as two separate commands.
+Keep those as two separate commands, chaining them in one invocation trips
+a Gradle task-ordering check.
 
 ## Status
 
-Scaffold complete for all 6 version/loader combinations (project
-configuration succeeds for all of them). Full build verified for
-`1.20.1-fabric` and `26.1-fabric`; the rest are configured but not yet
-build-verified. No mod features are implemented yet beyond the template's
-own example event handler/mixin — chunk tracking, the map screen, and the
-regen/retrogen engine are still to come.
+All 6 version/loader combos build. Chunk tracking, the map screen, and
+regen + undo work everywhere. Regen only opens from a click on the map
+right now, no keybinding to jump straight to it, and on 26.3 there's no
+keybinding to open the map at all yet since that version swapped GLFW for
+SDL and I haven't sorted out the new key constants.
+
+Not done: retrogen wrapping for other mods, per-chunk resource info,
+multiplayer support (map screen is singleplayer only for now).
+
+I haven't been able to test any of this in an actual running game yet, just
+verified it all compiles. Try it in a world you don't care about first.
 
 ## Credit
 
-Scaffolded from [Mat0u5/MinecraftModTemplate](https://github.com/Mat0u5/MinecraftModTemplate)
-(MIT licensed), a Stonecutter + custom platform-abstraction multi-loader
-template.
+Started from [Mat0u5/MinecraftModTemplate](https://github.com/Mat0u5/MinecraftModTemplate)
+(MIT licensed).

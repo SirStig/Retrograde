@@ -27,10 +27,9 @@ import net.neoforged.fml.common.Mod;
  ^///?}
 public class NeoforgeEventSubscriber {
 
-	// Both break and place fire *before* the change is applied and can be
-	// cancelled by other mods — LOWEST priority runs last, after any other
-	// listener has had a chance to cancel, so checking isCanceled() here
-	// actually reflects whether the change is really going to happen.
+	// Both events fire before the change is applied and can be cancelled by
+	// other mods. LOWEST priority runs last, so isCanceled() here reflects
+	// the final outcome, not just this listener's view.
 	@SubscribeEvent(priority = EventPriority.LOWEST)
 	public static void onBlockBreak(BreakBlockEvent event) {
 		if (event.isCanceled()) return;

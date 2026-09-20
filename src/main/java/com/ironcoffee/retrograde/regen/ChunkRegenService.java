@@ -24,32 +24,24 @@ import java.util.stream.Stream;
 /**
  * Chunk regeneration with undo.
  *
- * How it works: writes a minimal "Status: empty" NBT tag for the target
- * chunk directly into the level's on-disk chunk storage (ChunkMap's base
- * class exposes read/write publicly — no reflection needed). That alone
- * doesn't touch whatever's currently loaded in memory; it only changes what
- * a *future* load will see. Once the chunk naturally unloads (no player
- * nearby) and gets requested again, Minecraft's own chunk-loading pipeline
- * treats it exactly like unexplored terrain and regenerates it from scratch
- * — the same machinery ordinary world exploration already relies on,
- * including correctly blending with already-generated neighbor chunks. This
- * deliberately avoids hand-driving the multi-stage ChunkGenerator pipeline
- * (createBiomes, fillFromNoise, buildSurface, applyCarvers,
- * applyBiomeDecoration, createStructures, ...) ourselves, which would mean
- * correctly replicating Mojang's neighbor-chunk bookkeeping — fragile, and
- * not verifiable here since there's no way to launch a graphical client in
- * this environment.
+ * Writes a minimal "Status: empty" NBT tag directly into the level's
+ * on-disk chunk storage (ChunkMap's base class exposes read/write
+ * publicly). That only changes what a future load sees, not what's
+ * currently in memory: once the chunk naturally unloads and gets requested
+ * again, vanilla's own chunk pipeline treats it as unexplored terrain and
+ * regenerates it, blending correctly with neighbors. Hand-driving the
+ * ChunkGenerator pipeline ourselves would mean replicating Mojang's
+ * neighbor-chunk bookkeeping, so we let vanilla do that part.
  *
- * Practical implication: a chunk won't visibly regenerate while a player is
- * standing on or next to it, since its in-memory chunk holder has to
- * actually unload first — callers should require the player to step away
- * (see isPlayerNear) rather than promise an instant result.
+ * A chunk won't visibly regenerate while a player is standing on or next
+ * to it, since its chunk holder has to unload first. Callers should wait
+ * for the player to step away (see isPlayerNear) instead of expecting an
+ * instant result.
  *
- * The storage class backing ChunkMap's read/write changed name between
- * 1.20.1 (ChunkStorage) and 26.x (SimpleRegionStorage), and write() went
- * from synchronous to returning a CompletableFuture — neither matters here
- * since the public read(ChunkPos)/write(ChunkPos, CompoundTag) signatures
- * we actually call are unchanged, and we don't need write's return value.
+ * ChunkMap's storage class was renamed ChunkStorage -> SimpleRegionStorage
+ * between 1.20.1 and 26.x, and write() became async. Neither matters here
+ * since the read(ChunkPos)/write(ChunkPos, CompoundTag) signatures we call
+ * are unchanged.
  */
 public final class ChunkRegenService {
 	private static final int MAX_SNAPSHOTS_PER_CHUNK = 5;

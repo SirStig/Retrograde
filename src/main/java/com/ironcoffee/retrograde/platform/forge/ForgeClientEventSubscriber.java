@@ -41,10 +41,9 @@ public class ForgeClientEventSubscriber {
 		);
 		event.register(openChunkMapKey);
 
-		// Client tick lives on Forge's general event bus, not the MOD bus
-		// this class's other handler (client setup) is scoped to — register
-		// this one manually rather than fighting the class-level bus
-		// annotation for a single listener.
+		// Client tick fires on Forge's general event bus, not the MOD bus this
+		// class is scoped to, so register it manually instead of fighting the
+		// class-level bus annotation for one listener.
 		MinecraftForge.EVENT_BUS.addListener(ForgeClientEventSubscriber::onClientTick);
 	}
 

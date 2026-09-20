@@ -32,27 +32,19 @@ public class FabricClientEntrypoint implements ClientModInitializer {
 
 		// Fabric API's keybinding module was renamed end-to-end in 26.x:
 		// fabric-key-binding-api-v1 -> fabric-key-mapping-api-v1,
-		// KeyBindingHelper -> KeyMappingHelper,
-		// registerKeyBinding -> registerKeyMapping — matching the vanilla
-		// KeyBinding -> KeyMapping rename. The bigger change is the category
-		// parameter: a bare String before, a proper KeyMapping.Category
-		// record needing its own one-time registration now (verified
-		// against the real 26.1 decompiled source, including that
-		// KeyMapping.Category.register(ResourceLocation) — while marked
-		// @deprecated in favor of NeoForge's RegisterKeyMappingsEvent for
-		// NeoForge mods specifically — is still the correct, functional
-		// call for a plain Fabric client with no such event to hook).
+		// KeyBindingHelper -> KeyMappingHelper, registerKeyBinding ->
+		// registerKeyMapping, matching the vanilla KeyBinding -> KeyMapping
+		// rename. The category parameter also changed, from a bare String to
+		// a KeyMapping.Category record that needs one-time registration.
+		// KeyMapping.Category.register(ResourceLocation) is marked
+		// @deprecated in favor of NeoForge's RegisterKeyMappingsEvent, but
+		// that's NeoForge-specific; it's still the right call on plain Fabric.
 		//
-		// >=26.3 doesn't get a keybinding (or the map screen it would open)
-		// at all yet: tracing InputConstants.Type into the real 26.3
-		// decompiled source turned up something much bigger than another
-		// rename — Minecraft replaced GLFW with SDL for windowing/input in
-		// 26.3 specifically (InputConstants.Type.KEYSYM is gone, replaced
-		// by KEYBOARD, backed by SDLKeyboard.SDL_GetKeyFromScancode instead
-		// of GLFW key constants; Minecraft.screen moved behind a new `gui`
-		// wrapper too). That's a real, dedicated research problem — SDL
-		// scancodes aren't the same numbering as the GLFW keycode I'd
-		// otherwise hardcode — not something to graft a guess onto.
+		// >=26.3 has no keybinding (or the map screen it would open) yet:
+		// Minecraft swapped GLFW for SDL for windowing/input in that version.
+		// InputConstants.Type.KEYSYM is gone, replaced by KEYBOARD backed by
+		// SDL scancodes, which don't share GLFW's numbering, so the old key
+		// constant can't just be reused as-is.
 		//? if <26 {
 		openChunkMapKey = KeyBindingHelper.registerKeyBinding(new KeyMapping(
 			"key.retrograde.open_chunk_map",
