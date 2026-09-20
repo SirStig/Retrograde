@@ -6,10 +6,17 @@
   "gui.retrograde.chunk_map.legend": "%sx%s chunks \u2014 gold: you, green: touched, gray: unknown \u2014 click: regen, shift-click: undo",
   "key.category.retrograde.main": "Retrograde",
   "gui.retrograde.confirm_regen": "Regenerate chunk (%s, %s)?",
+  "gui.retrograde.confirm_regen_touched": "WARNING: Regenerate TOUCHED chunk (%s, %s)?",
   "gui.retrograde.confirm_undo": "Undo last regen of chunk (%s, %s)?",
   "gui.retrograde.confirm_regen.detail": "This destroys any changes in the chunk once it reloads. Step away from it first \u2014 it won't regenerate while you're standing nearby.",
+  "gui.retrograde.confirm_regen_touched.detail": "This chunk has your changes in it: builds, mining, anything you've placed. Regenerating destroys all of that. You can undo it afterward (shift-click), but only the last few regens per chunk are kept. Step away from the chunk first.",
   "gui.retrograde.regen_result.ok": "Retrograde: chunk queued \u2014 it will regenerate once it unloads",
   "gui.retrograde.regen_result.too_close": "Retrograde: move away from that chunk first",
   "gui.retrograde.regen_result.nothing_to_undo": "Retrograde: nothing to undo for that chunk",
-  "gui.retrograde.regen_result.io_error": "Retrograde: failed \u2014 check the log"
+  "gui.retrograde.regen_result.io_error": "Retrograde: failed \u2014 check the log",
+  "gui.retrograde.chunk_map.tooltip.you": "That's you",
+  "gui.retrograde.chunk_map.tooltip.touched": "Touched",
+  "gui.retrograde.chunk_map.tooltip.unknown": "Unknown",
+  "gui.retrograde.chunk_map.tooltip.not_loaded": "Not loaded \u2014 get closer to see resources",
+  "gui.retrograde.chunk_map.tooltip.no_ores": "No ores found"
 }

@@ -1,5 +1,6 @@
 package com.ironcoffee.retrograde.gui;
 
+import com.ironcoffee.retrograde.chunk.ChunkResourceInfo;
 import com.ironcoffee.retrograde.chunk.ChunkTracker;
 import com.ironcoffee.retrograde.regen.ChunkRegenService;
 import net.minecraft.client.gui.screens.ConfirmScreen;
@@ -16,11 +17,21 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.Level;
 
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
 /**
  * Chunk-status map: grid of squares centered on the player, color-coded
  * TOUCHED (green) / UNKNOWN (gray). Click a cell to regenerate that chunk;
  * shift-click to undo the most recent regen (see ChunkRegenService for why
- * regen needs the player to step away first).
+ * regen needs the player to step away first). Hovering a loaded chunk shows
+ * its ore tally.
+ *
+ * Regenerating a chunk with recorded player changes asks for a stronger
+ * confirmation than an untouched one, this is genuinely destructive and
+ * shouldn't be one click away from looking the same as a no-op.
  *
  * Singleplayer only: reads chunk status via the local integrated server.
  * A remote server would need a network round trip that doesn't exist yet.
@@ -28,7 +39,9 @@ import net.minecraft.world.level.Level;
  * Two render paths: 26.x replaced Screen's render(GuiGraphics, ...) with
  * extractRenderState(GuiGraphicsExtractor, ...), a real rendering pipeline
  * change, not a rename. fill(...) kept its signature; drawCenteredString /
- * drawString became centeredText / text.
+ * drawString became centeredText / text, and tooltips moved from an
+ * immediate renderComponentTooltip(...) call to a retained
+ * setComponentTooltipForNextFrame(...) one.
  */
 public class ChunkMapScreen extends Screen {
 	private static final int GRID_RADIUS_CHUNKS = 8; // 17x17 grid
@@ -37,6 +50,9 @@ public class ChunkMapScreen extends Screen {
 	private static final int COLOR_TOUCHED = 0xFF3D8B3D;
 	private static final int COLOR_PLAYER = 0xFFE0C040;
 	private static final int COLOR_GRIDLINE = 0xFF202020;
+	private static final int MAX_TOOLTIP_ORES = 6;
+
+	private final Map<ChunkPos, List<ChunkResourceInfo.Entry>> resourceCache = new HashMap<>();
 
 	public ChunkMapScreen() {
 		super(Component.translatable("gui.retrograde.chunk_map.title"));
@@ -99,6 +115,13 @@ public class ChunkMapScreen extends Screen {
 		guiGraphics.drawString(font,
 			Component.translatable("gui.retrograde.chunk_map.legend", GRID_RADIUS_CHUNKS * 2 + 1),
 			originX, originY + gridPixelSize + 8, 0xA0A0A0);
+
+		int[] hovered = hoveredCellOffset(mouseX, mouseY);
+		if (hovered != null) {
+			ChunkPos hoveredPos = new ChunkPos(centerChunk.x + hovered[0], centerChunk.z + hovered[1]);
+			List<Component> tooltip = buildTooltip(serverLevel, dimension, tracker, hoveredPos, hovered[0] == 0 && hovered[1] == 0);
+			guiGraphics.renderComponentTooltip(font, tooltip, mouseX, mouseY);
+		}
 	}
 
 	//?} else {
@@ -153,8 +176,72 @@ public class ChunkMapScreen extends Screen {
 		guiGraphics.text(font,
 			Component.translatable("gui.retrograde.chunk_map.legend", GRID_RADIUS_CHUNKS * 2 + 1),
 			originX, originY + gridPixelSize + 8, 0xA0A0A0);
+
+		int[] hovered = hoveredCellOffset(mouseX, mouseY);
+		if (hovered != null) {
+			ChunkPos hoveredPos = new ChunkPos(centerChunk.x() + hovered[0], centerChunk.z() + hovered[1]);
+			List<Component> tooltip = buildTooltip(serverLevel, dimension, tracker, hoveredPos, hovered[0] == 0 && hovered[1] == 0);
+			guiGraphics.setComponentTooltipForNextFrame(font, tooltip, mouseX, mouseY);
+		}
 	}
 	*///?}
+
+	/** Grid offset {dx, dz} from the player's chunk under the cursor, or null if outside the grid. */
+	private int[] hoveredCellOffset(int mouseX, int mouseY) {
+		int gridPixelSize = (GRID_RADIUS_CHUNKS * 2 + 1) * CELL_SIZE;
+		int originX = (width - gridPixelSize) / 2;
+		int originY = (height - gridPixelSize) / 2;
+
+		int cellCol = (int) Math.floor((mouseX - originX) / (double) CELL_SIZE);
+		int cellRow = (int) Math.floor((mouseY - originY) / (double) CELL_SIZE);
+		if (cellCol < 0 || cellCol > GRID_RADIUS_CHUNKS * 2 || cellRow < 0 || cellRow > GRID_RADIUS_CHUNKS * 2) {
+			return null;
+		}
+		return new int[] { cellCol - GRID_RADIUS_CHUNKS, cellRow - GRID_RADIUS_CHUNKS };
+	}
+
+	private List<Component> buildTooltip(ServerLevel serverLevel, ResourceKey<Level> dimension, ChunkTracker tracker, ChunkPos pos, boolean isPlayerChunk) {
+		List<Component> lines = new ArrayList<>();
+		lines.add(Component.literal("(" + chunkX(pos) + ", " + chunkZ(pos) + ")"));
+		if (isPlayerChunk) {
+			lines.add(Component.translatable("gui.retrograde.chunk_map.tooltip.you"));
+		} else {
+			ChunkTracker.Status status = tracker.statusOf(dimension, pos);
+			lines.add(Component.translatable(status == ChunkTracker.Status.TOUCHED
+				? "gui.retrograde.chunk_map.tooltip.touched"
+				: "gui.retrograde.chunk_map.tooltip.unknown"));
+		}
+
+		List<ChunkResourceInfo.Entry> resources = resourceCache.computeIfAbsent(pos, p -> ChunkResourceInfo.scan(serverLevel.getChunkSource(), p));
+		if (resources == null) {
+			lines.add(Component.translatable("gui.retrograde.chunk_map.tooltip.not_loaded"));
+		} else if (resources.isEmpty()) {
+			lines.add(Component.translatable("gui.retrograde.chunk_map.tooltip.no_ores"));
+		} else {
+			int shown = Math.min(resources.size(), MAX_TOOLTIP_ORES);
+			for (int i = 0; i < shown; i++) {
+				ChunkResourceInfo.Entry entry = resources.get(i);
+				lines.add(Component.literal(entry.count() + "x ").append(entry.block().getName()));
+			}
+		}
+		return lines;
+	}
+
+	private static int chunkX(ChunkPos pos) {
+		//? if >=26 {
+		/*return pos.x();
+		*///?} else {
+		return pos.x;
+		//?}
+	}
+
+	private static int chunkZ(ChunkPos pos) {
+		//? if >=26 {
+		/*return pos.z();
+		*///?} else {
+		return pos.z;
+		//?}
+	}
 
 	// 26.x reworked input handling: mouseClicked(double, double, int) became
 	// mouseClicked(MouseButtonEvent, boolean), and Screen.hasShiftDown()
@@ -190,48 +277,35 @@ public class ChunkMapScreen extends Screen {
 			return false;
 		}
 
+		int[] hovered = hoveredCellOffset((int) mouseX, (int) mouseY);
+		if (hovered == null || (hovered[0] == 0 && hovered[1] == 0)) {
+			return false;
+		}
+
 		//? if >=26 {
 		/*ChunkPos centerChunk = ChunkPos.containing(player.blockPosition());
+		ChunkPos target = new ChunkPos(centerChunk.x() + hovered[0], centerChunk.z() + hovered[1]);
 		*///?} else {
 		ChunkPos centerChunk = new ChunkPos(player.blockPosition());
+		ChunkPos target = new ChunkPos(centerChunk.x + hovered[0], centerChunk.z + hovered[1]);
 		//?}
-		int gridPixelSize = (GRID_RADIUS_CHUNKS * 2 + 1) * CELL_SIZE;
-		int originX = (width - gridPixelSize) / 2;
-		int originY = (height - gridPixelSize) / 2;
-
-		int cellCol = (int) Math.floor((mouseX - originX) / CELL_SIZE);
-		int cellRow = (int) Math.floor((mouseY - originY) / CELL_SIZE);
-		if (cellCol < 0 || cellCol > GRID_RADIUS_CHUNKS * 2 || cellRow < 0 || cellRow > GRID_RADIUS_CHUNKS * 2) {
-			return false;
-		}
-
-		int dx = cellCol - GRID_RADIUS_CHUNKS;
-		int dz = cellRow - GRID_RADIUS_CHUNKS;
-		if (dx == 0 && dz == 0) {
-			return false;
-		}
-
-		//? if >=26 {
-		/*ChunkPos target = new ChunkPos(centerChunk.x() + dx, centerChunk.z() + dz);
-		*///?} else {
-		ChunkPos target = new ChunkPos(centerChunk.x + dx, centerChunk.z + dz);
-		//?}
-		confirmRegenAction(serverLevel, target, shiftDown);
+		confirmRegenAction(server, serverLevel, dimension, target, shiftDown);
 		return true;
 	}
 
-	private void confirmRegenAction(ServerLevel serverLevel, ChunkPos target, boolean undo) {
+	private void confirmRegenAction(MinecraftServer server, ServerLevel serverLevel, ResourceKey<Level> dimension, ChunkPos target, boolean undo) {
 		if (undo && !ChunkRegenService.hasUndo(serverLevel, target)) {
 			return;
 		}
-		String titleKey = undo ? "gui.retrograde.confirm_undo" : "gui.retrograde.confirm_regen";
-		//? if >=26 {
-		/*int targetX = target.x();
-		int targetZ = target.z();
-		*///?} else {
-		int targetX = target.x;
-		int targetZ = target.z;
-		//?}
+		boolean touched = !undo && ChunkTracker.forServer(server).statusOf(dimension, target) == ChunkTracker.Status.TOUCHED;
+		String titleKey = undo
+			? "gui.retrograde.confirm_undo"
+			: (touched ? "gui.retrograde.confirm_regen_touched" : "gui.retrograde.confirm_regen");
+		String detailKey = undo
+			? "gui.retrograde.confirm_regen.detail"
+			: (touched ? "gui.retrograde.confirm_regen_touched.detail" : "gui.retrograde.confirm_regen.detail");
+		int targetX = chunkX(target);
+		int targetZ = chunkZ(target);
 		openScreen(new ConfirmScreen(
 			confirmed -> {
 				if (confirmed) {
@@ -243,7 +317,7 @@ public class ChunkMapScreen extends Screen {
 				openScreen(new ChunkMapScreen());
 			},
 			Component.translatable(titleKey, targetX, targetZ),
-			Component.translatable("gui.retrograde.confirm_regen.detail")
+			Component.translatable(detailKey)
 		));
 	}
 
