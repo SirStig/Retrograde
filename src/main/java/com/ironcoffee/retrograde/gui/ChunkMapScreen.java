@@ -76,6 +76,40 @@ public class ChunkMapScreen extends Screen {
 	private static final int MAX_ZOOM = 4;
 	private static final int DRAG_THRESHOLD = 5;
 
+	// Mouse-button and key numbers, spelled out rather than pulling LWJGL or
+	// SDL into a file that otherwise only touches Minecraft classes.
+	//
+	// 26.3 swapped the input backend from GLFW to SDL, which numbers both the
+	// mouse buttons and the non-printable keys differently - vanilla's own
+	// AbstractWidget treats button 1 as the left button on 26.3 and button 0
+	// on everything before it, which is how this was pinned down. Printable
+	// keys are ASCII either way, so '-' and '=' are shared.
+	//? if >=26.3 {
+	/*private static final int BUTTON_LEFT = 1;
+	private static final int BUTTON_MIDDLE = 2;
+	private static final int BUTTON_RIGHT = 3;
+	private static final int KEY_RIGHT = 1073741903;
+	private static final int KEY_LEFT = 1073741904;
+	private static final int KEY_DOWN = 1073741905;
+	private static final int KEY_UP = 1073741906;
+	private static final int KEY_KP_SUBTRACT = 1073741910;
+	private static final int KEY_KP_ADD = 1073741911;
+	*///?} else {
+	private static final int BUTTON_LEFT = 0;
+	private static final int BUTTON_RIGHT = 1;
+	private static final int BUTTON_MIDDLE = 2;
+	private static final int KEY_RIGHT = 262;
+	private static final int KEY_LEFT = 263;
+	private static final int KEY_DOWN = 264;
+	private static final int KEY_UP = 265;
+	private static final int KEY_KP_SUBTRACT = 333;
+	private static final int KEY_KP_ADD = 334;
+	//?}
+	private static final int KEY_MINUS = 45;
+	private static final int KEY_EQUAL = 61;
+	/** How far one arrow-key press slides the map, in screen pixels. */
+	private static final int KEY_PAN_PIXELS = 48;
+
 	private static final int PANEL_WIDTH = 152;
 	private static final int PANEL_PAD = 6;
 	private static final int LINE_H = 10;
@@ -84,6 +118,11 @@ public class ChunkMapScreen extends Screen {
 	private static final int ORE_COLUMNS = 3;
 	private static final int ORE_ROWS = 2;
 	private static final int MAX_PANEL_ORES = ORE_COLUMNS * ORE_ROWS;
+	private static final int ORE_TOGGLE_W = 13;
+	private static final int ORE_TOGGLE_H = 11;
+	/** Wider than the info panel: this one spells each ore's name out. */
+	private static final int ORE_PANEL_WIDTH = 168;
+	private static final int ORE_PANEL_GAP = 6;
 	private static final int ACTION_BUTTON_H = 18;
 	private static final int ACTION_BUTTON_GAP = 4;
 	private static final int ACTION_BUTTONS = 4;
@@ -150,11 +189,16 @@ public class ChunkMapScreen extends Screen {
 	private int titleX, titleY, titleW, titleH;
 	private int hintX, hintY, hintW, hintH;
 	private int panelX, infoPanelY, infoPanelH, actionPanelY, actionPanelH;
+	private int oreListX, oreListY, oreListH;
+
+	/** Whether the full ore breakdown is pinned open beside the info panel. */
+	private boolean oreListOpen;
 
 	private Button regenButton;
 	private Button undoButton;
 	private Button retrogenButton;
 	private Button clearButton;
+	private Button oreToggle;
 
 	public ChunkMapScreen() {
 		super(Component.translatable("gui.retrograde.chunk_map.title"));
@@ -212,10 +256,21 @@ public class ChunkMapScreen extends Screen {
 
 		panelX = CHIP_MARGIN;
 		infoPanelY = CHIP_MARGIN;
-		infoPanelH = PANEL_PAD * 2 + LINE_H * 3 + 5 + ORE_ROW_H * ORE_ROWS;
+		infoPanelH = PANEL_PAD * 2 + LINE_H * 4 + 5 + ORE_ROW_H * ORE_ROWS;
 		actionPanelY = infoPanelY + infoPanelH + 6;
 		actionPanelH = PANEL_PAD * 2 + LINE_H * 2 + 4
 			+ ACTION_BUTTONS * ACTION_BUTTON_H + (ACTION_BUTTONS - 1) * ACTION_BUTTON_GAP;
+
+		// Sits on the ore heading row, right-aligned inside the info panel.
+		oreToggle = addRenderableWidget(Button.builder(Component.literal(oreListOpen ? "«" : "»"), b -> toggleOreList())
+			.tooltip(Tooltip.create(Component.translatable("gui.retrograde.chunk_map.panel.ores.tip")))
+			.bounds(panelX + PANEL_WIDTH - PANEL_PAD - ORE_TOGGLE_W,
+				infoPanelY + PANEL_PAD + LINE_H * 3 + 4, ORE_TOGGLE_W, ORE_TOGGLE_H)
+			.build());
+
+		oreListX = panelX + PANEL_WIDTH + ORE_PANEL_GAP;
+		oreListY = infoPanelY;
+		oreListH = 0;
 
 		int buttonX = panelX + PANEL_PAD;
 		int buttonW = PANEL_WIDTH - PANEL_PAD * 2;
@@ -349,6 +404,10 @@ public class ChunkMapScreen extends Screen {
 		if (isOverChip(mouseX, mouseY, hintX, hintY, hintW, hintH)) return false;
 		int columnH = actionPanelY + actionPanelH - infoPanelY;
 		if (isOverChip(mouseX, mouseY, panelX, infoPanelY, PANEL_WIDTH, columnH)) return false;
+		// The expanded ore list floats over the map, and it describes whichever
+		// chunk is in focus - so hovering it must not change what's in focus,
+		// or the list would rewrite itself out from under the cursor.
+		if (oreListOpen && isOverChip(mouseX, mouseY, oreListX, oreListY, ORE_PANEL_WIDTH, oreListH)) return false;
 		return true;
 	}
 
@@ -502,6 +561,9 @@ public class ChunkMapScreen extends Screen {
 	private void drawInfoPanel(Painter painter, MinecraftServer server, ResourceKey<Level> dimension,
 			ChunkTracker tracker, ChunkPos playerChunk) {
 		drawChip(painter, panelX, infoPanelY, PANEL_WIDTH, infoPanelH);
+		// Recomputed below if the list actually gets drawn this frame; zeroed
+		// here so a chunk with no ore data leaves no phantom hit-box behind.
+		oreListH = 0;
 
 		int textX = panelX + PANEL_PAD;
 		int y = infoPanelY + PANEL_PAD;
@@ -549,6 +611,10 @@ public class ChunkMapScreen extends Screen {
 		y += 5;
 
 		List<ChunkResourceInfo.Entry> ores = inspection == null ? null : inspection.ores();
+		painter.text(font, Component.translatable("gui.retrograde.chunk_map.panel.ores",
+			ores == null ? "?" : String.valueOf(ores.size())), textX, y, COLOR_HEADING);
+		y += LINE_H;
+
 		if (ores == null || ores.isEmpty()) {
 			painter.text(font, Component.translatable(ores == null
 					? "gui.retrograde.chunk_map.panel.ores_unknown"
@@ -562,7 +628,8 @@ public class ChunkMapScreen extends Screen {
 		int cellWidth = (PANEL_WIDTH - PANEL_PAD * 2) / ORE_COLUMNS;
 		// Entries come sorted by count, so when there are more than fit, the
 		// ones dropped are the rarest - and the last cell says how many, so
-		// the panel never quietly under-reports what's down there.
+		// the panel never quietly under-reports what's down there. The full
+		// list is one click away on the toggle beside the heading.
 		boolean overflow = ores.size() > MAX_PANEL_ORES;
 		int shown = overflow ? MAX_PANEL_ORES - 1 : ores.size();
 		for (int i = 0; i < shown; i++) {
@@ -575,8 +642,59 @@ public class ChunkMapScreen extends Screen {
 		if (overflow) {
 			int cellX = textX + (shown % ORE_COLUMNS) * cellWidth;
 			int cellY = y + (shown / ORE_COLUMNS) * ORE_ROW_H;
-			painter.text(font, "+" + (ores.size() - shown), cellX, cellY + 4, COLOR_MESSAGE_TEXT);
+			painter.text(font, "+" + (ores.size() - shown), cellX, cellY + 4, COLOR_SELECTED_EDGE);
 		}
+
+		if (oreListOpen) {
+			drawOreListPanel(painter, ores);
+		}
+	}
+
+	/**
+	 * The full breakdown, one ore per row with its name spelled out, in its
+	 * own panel to the right of the info panel - so opening it doesn't move
+	 * or resize anything that was already on screen.
+	 */
+	private void drawOreListPanel(Painter painter, List<ChunkResourceInfo.Entry> ores) {
+		// Never let the list run off the bottom of the window; whatever doesn't
+		// fit is counted on a final line rather than silently clipped.
+		int room = height - CHIP_MARGIN - oreListY - PANEL_PAD * 2 - LINE_H;
+		int maxRows = Math.max(1, room / ORE_ROW_H);
+		boolean clipped = ores.size() > maxRows;
+		int rows = clipped ? maxRows - 1 : ores.size();
+
+		oreListH = PANEL_PAD * 2 + LINE_H + (rows + (clipped ? 1 : 0)) * ORE_ROW_H;
+		drawChip(painter, oreListX, oreListY, ORE_PANEL_WIDTH, oreListH);
+
+		int textX = oreListX + PANEL_PAD;
+		int y = oreListY + PANEL_PAD;
+		painter.text(font, Component.translatable("gui.retrograde.chunk_map.panel.ore_list"), textX, y, COLOR_HEADING);
+		y += LINE_H;
+
+		for (int i = 0; i < rows; i++) {
+			ChunkResourceInfo.Entry entry = ores.get(i);
+			ItemStack stack = new ItemStack(entry.block());
+			painter.item(stack, textX, y);
+			String count = String.valueOf(entry.count());
+			int countX = oreListX + ORE_PANEL_WIDTH - PANEL_PAD - font.width(count);
+			painter.text(font, count, countX, y + 4, 0xFFFFFFFF);
+			// Trim the name against where the count starts, not the panel edge,
+			// so a long modded ore name can't overwrite its own number.
+			int nameX = textX + ORE_ICON + 4;
+			painter.text(font, trimTo(stack.getHoverName().getString(), countX - nameX - 4),
+				nameX, y + 4, COLOR_BIOME_TEXT);
+			y += ORE_ROW_H;
+		}
+
+		if (clipped) {
+			painter.text(font, "+" + (ores.size() - rows), textX, y + 4, COLOR_MESSAGE_TEXT);
+		}
+	}
+
+	private void toggleOreList() {
+		oreListOpen = !oreListOpen;
+		if (!oreListOpen) oreListH = 0;
+		oreToggle.setMessage(Component.literal(oreListOpen ? "«" : "»"));
 	}
 
 	/** Fixed panel under the info panel: what's selected and what can be done to it. */
@@ -601,9 +719,12 @@ public class ChunkMapScreen extends Screen {
 	}
 
 	private String trimToPanel(String text) {
-		int budget = PANEL_WIDTH - PANEL_PAD * 2;
+		return trimTo(text, PANEL_WIDTH - PANEL_PAD * 2);
+	}
+
+	private String trimTo(String text, int budget) {
 		if (font.width(text) <= budget) return text;
-		return font.plainSubstrByWidth(text, budget - font.width("...")) + "...";
+		return font.plainSubstrByWidth(text, Math.max(0, budget - font.width("..."))) + "...";
 	}
 
 	private static String biomeDisplayName(ResourceLocation biomeId) {
@@ -849,7 +970,7 @@ public class ChunkMapScreen extends Screen {
 	/*@Override
 	public boolean mouseClicked(net.minecraft.client.input.MouseButtonEvent event, boolean doubleClick) {
 		if (super.mouseClicked(event, doubleClick)) return true;
-		return handlePress(event.x(), event.y(), event.hasShiftDown(), event.hasControlDown());
+		return handlePress(event.x(), event.y(), event.button(), event.hasControlDown());
 	}
 
 	@Override
@@ -873,7 +994,7 @@ public class ChunkMapScreen extends Screen {
 	@Override
 	public boolean mouseClicked(double mouseX, double mouseY, int button) {
 		if (super.mouseClicked(mouseX, mouseY, button)) return true;
-		return handlePress(mouseX, mouseY, Screen.hasShiftDown(), Screen.hasControlDown());
+		return handlePress(mouseX, mouseY, button, Screen.hasControlDown());
 	}
 
 	@Override
@@ -895,14 +1016,68 @@ public class ChunkMapScreen extends Screen {
 	}
 	//?}
 
-	private boolean handlePress(double mouseX, double mouseY, boolean shiftDown, boolean ctrlDown) {
+	// keyPressed needs its own three-way split rather than riding along with
+	// the mouse block: the key value to test lives in a different accessor in
+	// each era. 26.3's KeyEvent.key() is the physical key, and keycode() is
+	// the one vanilla's own arrow handling compares against - so read the
+	// same field vanilla does rather than the similarly-named one.
+	//? if >=26.3 {
+	/*@Override
+	public boolean keyPressed(net.minecraft.client.input.KeyEvent event) {
+		if (handleKey(event.keycode())) return true;
+		return super.keyPressed(event);
+	}
+	*///?}
+	//? if >=26 && <26.3 {
+	/*@Override
+	public boolean keyPressed(net.minecraft.client.input.KeyEvent event) {
+		if (handleKey(event.key())) return true;
+		return super.keyPressed(event);
+	}
+	*///?}
+	//? if <26 {
+	@Override
+	public boolean keyPressed(int keyCode, int scanCode, int modifiers) {
+		if (handleKey(keyCode)) return true;
+		return super.keyPressed(keyCode, scanCode, modifiers);
+	}
+	//?}
+
+	/**
+	 * Left button selects, right and middle pan. Selecting is the thing this
+	 * screen exists for, so it gets the button people reach for first, and
+	 * panning moves to the one every map and RTS puts it on anyway. Ctrl
+	 * flips a left-drag from selecting to deselecting.
+	 */
+	private boolean handlePress(double mouseX, double mouseY, int button, boolean ctrlDown) {
 		if (!isOverMap(mouseX, mouseY)) return false;
 		pressScreenX = dragScreenX = mouseX;
 		pressScreenY = dragScreenY = mouseY;
 		dragTotalDistance = 0;
-		// Plain drag pans, because panning is what you do most; the modifiers
-		// turn the same drag into a selection box.
-		dragMode = shiftDown ? DragMode.SELECT_ADD : ctrlDown ? DragMode.SELECT_REMOVE : DragMode.PAN;
+		if (button == BUTTON_RIGHT || button == BUTTON_MIDDLE) {
+			dragMode = DragMode.PAN;
+		} else if (button == BUTTON_LEFT) {
+			dragMode = ctrlDown ? DragMode.SELECT_REMOVE : DragMode.SELECT_ADD;
+		} else {
+			return false;
+		}
+		return true;
+	}
+
+	/** Keyboard panning and zoom, so the map is usable without a mouse at all. */
+	private boolean handleKey(int keyCode) {
+		double step = KEY_PAN_PIXELS / pixelsPerBlock();
+		switch (keyCode) {
+			case KEY_LEFT -> cameraBlockX -= step;
+			case KEY_RIGHT -> cameraBlockX += step;
+			case KEY_UP -> cameraBlockZ -= step;
+			case KEY_DOWN -> cameraBlockZ += step;
+			case KEY_EQUAL, KEY_KP_ADD -> adjustZoom(1);
+			case KEY_MINUS, KEY_KP_SUBTRACT -> adjustZoom(-1);
+			default -> {
+				return false;
+			}
+		}
 		return true;
 	}
 
@@ -929,11 +1104,13 @@ public class ChunkMapScreen extends Screen {
 		dragMode = DragMode.NONE;
 		if (mode == DragMode.NONE) return false;
 
-		if (mode == DragMode.PAN) {
-			// A pan that never really moved is a click.
-			if (dragTotalDistance <= DRAG_THRESHOLD) {
-				toggleSelection(chunkAt(mouseX, mouseY));
-			}
+		if (mode == DragMode.PAN) return true;
+
+		// A drag that never really moved is a click, and a click on one chunk
+		// toggles it - otherwise clicking an already-selected chunk to drop it
+		// would be impossible, since the box only ever adds.
+		if (dragTotalDistance <= DRAG_THRESHOLD) {
+			toggleSelection(chunkAt(mouseX, mouseY));
 			return true;
 		}
 

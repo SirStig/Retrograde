@@ -9,8 +9,8 @@
   "gui.retrograde.chunk_map.close": "Close",
   "gui.retrograde.chunk_map.zoom_in": "Zoom in",
   "gui.retrograde.chunk_map.zoom_out": "Zoom out",
-  "gui.retrograde.chunk_map.controls_hint": "Drag: pan  ·  Click: select  ·  Shift-drag: select area  ·  Ctrl-drag: deselect  ·  Scroll: zoom",
-  "gui.retrograde.chunk_map.controls_hint_short": "Drag: pan  ·  Click: select  ·  Scroll: zoom",
+  "gui.retrograde.chunk_map.controls_hint": "Drag: select area  ·  Click: select chunk  ·  Ctrl-drag: deselect  ·  Right-drag or arrows: pan  ·  Scroll: zoom",
+  "gui.retrograde.chunk_map.controls_hint_short": "Drag: select  ·  Right-drag: pan  ·  Scroll: zoom",
 
   "gui.retrograde.chunk_map.tooltip.you": "You are here",
   "gui.retrograde.chunk_map.tooltip.touched": "Touched",
@@ -21,6 +21,9 @@
 
   "gui.retrograde.chunk_map.panel.no_chunk": "Point at a chunk",
   "gui.retrograde.chunk_map.panel.selected": "SELECTED",
+  "gui.retrograde.chunk_map.panel.ores": "ORES (%s)",
+  "gui.retrograde.chunk_map.panel.ores.tip": "Show or hide the full ore breakdown for this chunk, names and all.",
+  "gui.retrograde.chunk_map.panel.ore_list": "ALL ORES",
   "gui.retrograde.chunk_map.panel.ores_unknown": "Ores unknown",
   "gui.retrograde.chunk_map.panel.selection": "SELECTION",
   "gui.retrograde.chunk_map.panel.nothing_selected": "Nothing selected",

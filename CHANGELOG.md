@@ -38,3 +38,13 @@
   once a job has regenerated them
 - Fixed the entire visible map re-sampling every time a dialog was opened and
   dismissed, and fixed map textures being closed without being unregistered
+- Left-drag now box-selects instead of panning, since selecting is what the
+  screen is for. Panning moved to right-drag, middle-drag, and the arrow keys;
+  ctrl-drag still deselects and a left-click still toggles one chunk
+- Arrow keys pan and +/- zoom, so the map is usable without a mouse
+- Added a toggle beside the ore heading that opens the full ore breakdown in
+  its own panel next to the info panel - every ore with its name and count,
+  instead of the "+N" that previously hid the rarest ones with no way to see
+  them
+- Fixed mouse buttons and arrow keys being wrong on 26.3, which moved its input
+  backend from GLFW to SDL and renumbered both

@@ -55,13 +55,19 @@ walking closer fills the map in as you go.
 Down the left side are two fixed panels. The top one describes whatever
 chunk is under the cursor - coordinates, touched/untouched, biome, ore tally
 as icons - at a fixed size, in a fixed place, so it isn't covering the
-chunks you're trying to read. The one below it is the selection: click
-chunks to select them, shift-drag to box-select a region, ctrl-drag to
-deselect, then pick Regenerate, Undo, Retrogen, or Clear. Selected chunks
-are tinted and outlined on the map, and the panel says how many are
-selected and how many of those you've touched. A click only counts if the
-mouse didn't move far enough to register as a drag, so selecting and
-panning don't fight each other.
+chunks you're trying to read. The ore tally only has room for six, so a
+toggle beside its heading opens the full breakdown - every ore with its name
+and count - in its own panel alongside, rather than leaving the rarest ones
+hidden behind a "+4" you can't do anything with.
+
+The one below it is the selection: left-drag to box-select a region,
+ctrl-drag to deselect, click to toggle a single chunk, then pick Regenerate,
+Undo, Retrogen, or Clear. Selected chunks are tinted and outlined on the map,
+and the panel says how many are selected and how many of those you've
+touched. Panning is on right-drag and middle-drag (and the arrow keys, with
++/- to zoom) rather than left-drag, since selecting is the thing you came to
+this screen to do. A click only counts if the mouse didn't move far enough to
+register as a drag, so selecting and panning don't fight each other.
 
 All three actions run over the whole selection behind a progress screen -
 phase, progress bar, which chunk it's on, and done/skipped/failed counts,
@@ -94,9 +100,17 @@ The selection UI, the progress screen, and the teleport-out-and-back regen
 job are new and have a clean compile on all six targets behind them, nothing
 more. Anything needing a mouse is unverified in general: the environment I
 can test in has keyboard input only, so drag-to-pan, scroll-to-zoom, and now
-click-to-select and box-select have only compiling and a careful read of the
-code behind them. The 26.x `GuiGraphicsExtractor` render path is compile-only
-as always - no Wayland-friendly way to launch 26.1/26.3 and look at it yet.
+click-to-select, box-select and the ore breakdown toggle have only compiling
+and a careful read of the code behind them. The 26.x `GuiGraphicsExtractor`
+render path is compile-only as always - no Wayland-friendly way to launch
+26.1/26.3 and look at it yet.
+
+One thing that is verified, because it was checked against the shipped
+classes rather than guessed: 26.3 moved its input backend from GLFW to SDL,
+which renumbers both the mouse buttons (left is 1, not 0) and the
+non-printable keys (arrows are in SDL's 0x40000000 range). `ChunkMapScreen`
+carries a separate set of constants for 26.3 because of it. Anything else
+reading raw button or key numbers on 26.3 needs the same treatment.
 
 ## Credit
 
