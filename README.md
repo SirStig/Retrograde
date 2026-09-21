@@ -4,8 +4,8 @@
 
 Minecraft mod that tracks which chunks you've actually touched vs. chunks
 that are just sitting there unexplored, shows a real top-down terrain map
-with an ore tally per chunk, and lets you regen a chunk (with undo) or hand
-it off to another mod's own retrogen right from that screen.
+with an ore tally per chunk, and lets you select chunks on that map and
+regen them (with undo) or hand them to another mod's own retrogen.
 
 Not trying to auto-detect "what's missing" for every mod out there, that's
 not something you can know without re-running world generation. Instead it
@@ -52,31 +52,51 @@ and your own position, chunk grid lines, and only shows chunks the server
 has actually loaded - it doesn't read unloaded chunks off disk yet, so
 walking closer fills the map in as you go.
 
-Map controls: click a chunk to regen it (touched chunks get a stronger
-warning), shift-click to undo, ctrl-click to hand it to another mod's
-retrogen if one's installed, hover to see its ore tally. A click only
-counts if the mouse didn't move far enough to register as a drag. The
-keybinding to open the map is unbound by default on purpose - didn't want
-to guess a key that collides with whatever minimap mod you're probably
+Down the left side are two fixed panels. The top one describes whatever
+chunk is under the cursor - coordinates, touched/untouched, biome, ore tally
+as icons - at a fixed size, in a fixed place, so it isn't covering the
+chunks you're trying to read. The one below it is the selection: click
+chunks to select them, shift-drag to box-select a region, ctrl-drag to
+deselect, then pick Regenerate, Undo, Retrogen, or Clear. Selected chunks
+are tinted and outlined on the map, and the panel says how many are
+selected and how many of those you've touched. A click only counts if the
+mouse didn't move far enough to register as a drag, so selecting and
+panning don't fight each other.
+
+All three actions run over the whole selection behind a progress screen -
+phase, progress bar, which chunk it's on, and done/skipped/failed counts,
+with a Cancel that stops cleanly instead of abandoning you mid-run. Regen
+can't touch a chunk that's currently loaded (a loaded chunk saves itself
+back over the edit), so rather than refusing, the job parks you above the
+build height clear of the selection, waits for the chunks to unload, does
+the work, and puts you back exactly where you were. Anything still loaded
+after 30 seconds - forced chunks, spawn chunks - is reported as skipped
+rather than forced.
+
+The keybinding to open the map is unbound by default on purpose - didn't
+want to guess a key that collides with whatever minimap mod you're probably
 already running.
 
 Not done: more retrogen integrations beyond Mekanism, multiplayer support,
 panning to see explored-but-unloaded terrain (the map only ever reads live
 chunk data, see ROADMAP.md).
 
-This has been run in an actual game for real testing, not just compiled -
-that's how the original "everything shows as unloaded" bug got found and
-fixed (the map screen was reading chunk data straight off the render
-thread; only the server's own thread can actually do that), how the zoom
-buttons got confirmed working, and how the panel redesign above was
-confirmed to actually render (title chip, icon cluster, chunk grid, and ore
-tooltip all screenshotted live in a real 1.20.1 world). The 26.x
-`GuiGraphicsExtractor` render path only has a clean compile behind it, same
-as before - no Wayland-friendly way to actually launch 26.1/26.3 and look at
-it yet. Drag-to-pan and scroll-to-zoom specifically are still unverified
-though - the environment I can test in doesn't have working mouse input,
-only keyboard, so those two only have compiling and a careful read of the
-code behind them.
+### What's actually been verified
+
+Earlier versions were run in a real game, not just compiled - that's how the
+original "everything shows as unloaded" bug got found and fixed (the map
+screen was reading chunk data straight off the render thread; only the
+server's own thread can do that), how the zoom buttons got confirmed
+working, and how the title chip, icon cluster, chunk grid, and ore readout
+were confirmed to render, screenshotted live in a 1.20.1 world.
+
+The selection UI, the progress screen, and the teleport-out-and-back regen
+job are new and have a clean compile on all six targets behind them, nothing
+more. Anything needing a mouse is unverified in general: the environment I
+can test in has keyboard input only, so drag-to-pan, scroll-to-zoom, and now
+click-to-select and box-select have only compiling and a careful read of the
+code behind them. The 26.x `GuiGraphicsExtractor` render path is compile-only
+as always - no Wayland-friendly way to launch 26.1/26.3 and look at it yet.
 
 ## Credit
 

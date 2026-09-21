@@ -61,3 +61,17 @@ isn't tracked anywhere right now.
   currently-unloaded chunks instead of live ChunkAccess.
 - Multiplayer isn't supported at all - the map screen and regen both go
   straight at the local integrated server.
+- Chunk jobs are driven by the progress screen's client tick, because there
+  is no server-tick hook in this mod on any of the six targets. That's why
+  the progress screen refuses to close while a job is running: it *is* the
+  job's clock. The hole this leaves is a client crash or hard kill during
+  the regen phase, which would strand the player at the staging position
+  above the build height, invulnerable and weightless, with the remaining
+  chunks unprocessed. Fixing it properly means persisting the job (target
+  list, phase, and the saved return position and player flags) to the world
+  folder and resuming it on next load, which in turn wants a real server
+  tick hook per loader rather than the screen driving it.
+- The selection is capped at 256 chunks, and a regen job walks it at four
+  chunks per server tick with a blocking region-file read each. That's fine
+  at that size but it's why the cap exists; anything larger wants the reads
+  moved off the server thread.

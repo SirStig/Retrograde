@@ -10,8 +10,6 @@ import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.ChunkPos;
 
-import java.util.ArrayList;
-import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -29,18 +27,26 @@ import java.util.concurrent.atomic.AtomicInteger;
  * (same BlockableEventLoop family, just the client-side instance) does the
  * second once the sample is back.
  */
-final class ChunkTerrainTextureCache implements AutoCloseable {
+final class ChunkTerrainTextureCache {
+	/**
+	 * How long an unloaded chunk stays written off before we look again.
+	 * Without this, a chunk that was out of range the first time you panned
+	 * over it would stay grey for the rest of the session even after you
+	 * walked to it - or after a regen loaded it back in with new terrain.
+	 */
+	private static final long UNLOADED_RETRY_MS = 2000;
+
 	private final Map<ChunkPos, ResourceLocation> ready = new ConcurrentHashMap<>();
-	private final Set<ChunkPos> confirmedUnloaded = ConcurrentHashMap.newKeySet();
+	private final Map<ResourceLocation, DynamicTexture> textures = new ConcurrentHashMap<>();
+	private final Map<ChunkPos, Long> unloadedAt = new ConcurrentHashMap<>();
 	private final Set<ChunkPos> pending = ConcurrentHashMap.newKeySet();
-	private final List<DynamicTexture> owned = new ArrayList<>();
 	private final AtomicInteger nextId = new AtomicInteger();
 
 	enum Status { READY, PENDING, UNLOADED }
 
 	Status statusOf(ChunkPos pos) {
 		if (ready.containsKey(pos)) return Status.READY;
-		if (confirmedUnloaded.contains(pos)) return Status.UNLOADED;
+		if (unloadedAt.containsKey(pos)) return Status.UNLOADED;
 		return Status.PENDING;
 	}
 
@@ -48,14 +54,32 @@ final class ChunkTerrainTextureCache implements AutoCloseable {
 		return ready.get(pos);
 	}
 
+	/**
+	 * Forgets a chunk's cached texture so the next frame re-samples it.
+	 * Used after a regen job, where the whole point is that the terrain on
+	 * screen is no longer what's in the world.
+	 */
+	void invalidate(Minecraft minecraft, ChunkPos pos) {
+		unloadedAt.remove(pos);
+		ResourceLocation location = ready.remove(pos);
+		if (location == null) return;
+		DynamicTexture texture = textures.remove(location);
+		minecraft.execute(() -> {
+			minecraft.getTextureManager().release(location);
+			if (texture != null) {
+				texture.close();
+			}
+		});
+	}
+
 	void request(Minecraft minecraft, MinecraftServer server, ServerLevel level, ChunkPos pos) {
-		if (ready.containsKey(pos) || confirmedUnloaded.contains(pos) || !pending.add(pos)) {
+		if (ready.containsKey(pos) || !readyToRetry(pos) || !pending.add(pos)) {
 			return;
 		}
 		server.execute(() -> {
 			int[] sample = ChunkTerrainSample.sample(level, pos);
 			if (sample == null) {
-				confirmedUnloaded.add(pos);
+				unloadedAt.put(pos, System.currentTimeMillis());
 				pending.remove(pos);
 				return;
 			}
@@ -64,13 +88,19 @@ final class ChunkTerrainTextureCache implements AutoCloseable {
 				NativeImage image = new NativeImage(size, size, false);
 				for (int z = 0; z < size; z++) {
 					for (int x = 0; x < size; x++) {
-						int argb = sample[z * size + x];
-						// NativeImage stores ABGR, not ARGB - swap red and blue.
-						int abgr = (argb & 0xFF00FF00) | ((argb & 0xFF0000) >> 16) | ((argb & 0xFF) << 16);
+						int color = sample[z * size + x];
 						//? if >=26 {
-						/*image.setPixelABGR(x, z, abgr);
+						/*// calculateARGBColor (26.x) returns real ARGB, unlike the
+						// pre-26 method below, so it needs converting to the ABGR
+						// setPixelABGR expects: swap red and blue, keep alpha/green.
+						int abgr = (color & 0xFF00FF00) | ((color & 0xFF0000) >> 16) | ((color & 0xFF) << 16);
+						image.setPixelABGR(x, z, abgr);
 						*///?} else {
-						image.setPixelRGBA(x, z, abgr);
+						// calculateRGBColor already returns its channels pre-swapped
+						// for direct NativeImage use (Mojang's "RGB" name here is
+						// misleading), so this needs no conversion - swapping it
+						// again was the bug that made water/lava render red.
+						image.setPixelRGBA(x, z, color);
 						//?}
 					}
 				}
@@ -86,19 +116,32 @@ final class ChunkTerrainTextureCache implements AutoCloseable {
 				ResourceLocation location = new ResourceLocation(Main.MOD_ID, path);
 				//?}
 				minecraft.getTextureManager().register(location, texture);
+				textures.put(location, texture);
 				ready.put(pos, location);
-				owned.add(texture);
+				unloadedAt.remove(pos);
 				pending.remove(pos);
 			});
 		});
 	}
 
-	@Override
-	public void close() {
-		for (DynamicTexture texture : owned) {
-			texture.close();
+	private boolean readyToRetry(ChunkPos pos) {
+		Long lastMiss = unloadedAt.get(pos);
+		return lastMiss == null || System.currentTimeMillis() - lastMiss >= UNLOADED_RETRY_MS;
+	}
+
+	/**
+	 * Releases every texture. Each one has to come out of the texture
+	 * manager as well as being closed - closing alone leaves the manager
+	 * holding a registration for a texture that no longer exists, and the
+	 * map can easily register a few hundred of them in one session.
+	 */
+	void close(Minecraft minecraft) {
+		for (Map.Entry<ResourceLocation, DynamicTexture> entry : textures.entrySet()) {
+			minecraft.getTextureManager().release(entry.getKey());
+			entry.getValue().close();
 		}
-		owned.clear();
+		textures.clear();
 		ready.clear();
+		unloadedAt.clear();
 	}
 }

@@ -25,12 +25,12 @@ import java.util.concurrent.ConcurrentHashMap;
  * UNKNOWN, not "untouched": there's no way to know a chunk's history from
  * before the mod was installed.
  *
- * Storage is a plain append-only text file per dimension under the world
- * save dir ("<world>/retrograde/<dimension>.chunks", one "x,z" per line),
- * instead of Minecraft's SavedData/PersistentState system, since that API
- * has shifted too much across supported versions to chase. Append-only
- * because a touched chunk only needs writing once, and an interrupted
- * write can't corrupt lines already recorded.
+ * Storage is a plain text file per dimension under the world save dir
+ * ("<world>/retrograde/<dimension>.chunks", one "x,z" per line), instead of
+ * Minecraft's SavedData/PersistentState system, since that API has shifted
+ * too much across supported versions to chase. Marking a chunk appends one
+ * line, so the common case can't corrupt lines already recorded; clearing
+ * one (which only happens on regen) rewrites the file from memory.
  */
 public final class ChunkTracker {
 	public enum Status {
@@ -40,7 +40,7 @@ public final class ChunkTracker {
 
 	private static final Map<MinecraftServer, ChunkTracker> INSTANCES = new ConcurrentHashMap<>();
 
-	private final Map<ResourceKey<Level>, Set<Long>> touchedByDimension = new ConcurrentHashMap<>();
+	private final Map<ResourceKey<Level>, Set<ChunkPos>> touchedByDimension = new ConcurrentHashMap<>();
 	private final Map<ResourceKey<Level>, BufferedWriter> writers = new ConcurrentHashMap<>();
 	private final Path storageDir;
 
@@ -59,19 +59,9 @@ public final class ChunkTracker {
 		}
 	}
 
-	// ChunkPos#toLong() was renamed to #pack() in 26.x, alongside ChunkPos
-	// becoming a record. Bridge both names to one call site.
-	private static long packed(ChunkPos pos) {
-		//? if >=26 {
-		/*return pos.pack();
-		*///?} else {
-		return pos.toLong();
-		//?}
-	}
-
 	public Status statusOf(ResourceKey<Level> dimension, ChunkPos pos) {
-		Set<Long> touched = touchedByDimension.get(dimension);
-		if (touched == null || !touched.contains(packed(pos))) {
+		Set<ChunkPos> touched = touchedByDimension.get(dimension);
+		if (touched == null || !touched.contains(pos)) {
 			return Status.UNKNOWN;
 		}
 		return Status.TOUCHED;
@@ -80,15 +70,31 @@ public final class ChunkTracker {
 	/** Marks a chunk touched. A no-op (no file write) if already recorded. */
 	public void markTouched(ServerLevel level, ChunkPos pos) {
 		ResourceKey<Level> dimension = level.dimension();
-		Set<Long> touched = touchedByDimension.computeIfAbsent(dimension, key -> loadDimension(key));
-		if (!touched.add(packed(pos))) {
+		Set<ChunkPos> touched = touchedByDimension.computeIfAbsent(dimension, key -> loadDimension(key));
+		if (!touched.add(pos)) {
 			return;
 		}
 		appendToFile(dimension, pos);
 	}
 
-	private Set<Long> loadDimension(ResourceKey<Level> dimension) {
-		Set<Long> result = new HashSet<>();
+	/**
+	 * Drops a chunk's touched mark. Regenerating a chunk throws away exactly
+	 * the player changes that mark was recording, so leaving it set would
+	 * make the map lie about freshly regenerated terrain. Undo re-marks it
+	 * (see ChunkRegenJob), since restoring the snapshot brings those changes
+	 * back.
+	 */
+	public void clearTouched(ServerLevel level, ChunkPos pos) {
+		ResourceKey<Level> dimension = level.dimension();
+		Set<ChunkPos> touched = touchedByDimension.computeIfAbsent(dimension, key -> loadDimension(key));
+		if (!touched.remove(pos)) {
+			return;
+		}
+		rewriteFile(dimension, touched);
+	}
+
+	private Set<ChunkPos> loadDimension(ResourceKey<Level> dimension) {
+		Set<ChunkPos> result = new HashSet<>();
 		Path file = fileFor(dimension);
 		if (Files.exists(file)) {
 			try {
@@ -100,11 +106,7 @@ public final class ChunkTracker {
 					try {
 						int x = Integer.parseInt(trimmed.substring(0, comma));
 						int z = Integer.parseInt(trimmed.substring(comma + 1));
-						//? if >=26 {
-						/*result.add(ChunkPos.pack(x, z));
-						*///?} else {
-						result.add(ChunkPos.asLong(x, z));
-						//?}
+						result.add(new ChunkPos(x, z));
 					} catch (NumberFormatException ignored) {
 						// Skip malformed lines (e.g. truncated by a crash mid-write)
 						// instead of failing the whole dimension load.
@@ -121,16 +123,46 @@ public final class ChunkTracker {
 		try {
 			BufferedWriter writer = writers.computeIfAbsent(dimension, key -> openWriter(key));
 			if (writer == null) return;
-			//? if >=26 {
-			/*writer.write(pos.x() + "," + pos.z());
-			*///?} else {
-			writer.write(pos.x + "," + pos.z);
-			//?}
+			writer.write(line(pos));
 			writer.newLine();
 			writer.flush();
 		} catch (IOException e) {
 			Main.LOGGER.error("[{}] Failed recording touched chunk {} in {}", Main.MOD_ID, pos, dimension.location(), e);
 		}
+	}
+
+	private void rewriteFile(ResourceKey<Level> dimension, Set<ChunkPos> touched) {
+		// The append writer is holding the file open in append mode, so it
+		// has to go before we can truncate. The next markTouched() reopens it.
+		BufferedWriter appendWriter = writers.remove(dimension);
+		if (appendWriter != null) {
+			try {
+				appendWriter.close();
+			} catch (IOException e) {
+				Main.LOGGER.error("[{}] Failed closing chunk tracker writer for {}", Main.MOD_ID, dimension.location(), e);
+			}
+		}
+		Path file = fileFor(dimension);
+		try {
+			Files.createDirectories(file.getParent());
+			try (BufferedWriter writer = Files.newBufferedWriter(file, StandardCharsets.UTF_8,
+					StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING)) {
+				for (ChunkPos pos : touched) {
+					writer.write(line(pos));
+					writer.newLine();
+				}
+			}
+		} catch (IOException e) {
+			Main.LOGGER.error("[{}] Failed rewriting chunk tracker file {}", Main.MOD_ID, file, e);
+		}
+	}
+
+	private static String line(ChunkPos pos) {
+		//? if >=26 {
+		/*return pos.x() + "," + pos.z();
+		*///?} else {
+		return pos.x + "," + pos.z;
+		//?}
 	}
 
 	private BufferedWriter openWriter(ResourceKey<Level> dimension) {

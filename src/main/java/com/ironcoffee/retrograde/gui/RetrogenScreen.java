@@ -1,36 +1,29 @@
 package com.ironcoffee.retrograde.gui;
 
 import com.ironcoffee.retrograde.retrogen.RetrogenIntegration;
-import com.ironcoffee.retrograde.retrogen.RetrogenService;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.screens.ConfirmScreen;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.chat.Component;
-import net.minecraft.server.MinecraftServer;
-import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.level.ChunkPos;
 
 import java.util.List;
-import java.util.UUID;
 
 /**
  * Lists installed mods that have a known retrogen integration (see
- * RetrogenIntegrations) and lets you run one for a specific chunk. Reached
- * by ctrl-clicking a cell on the chunk map.
+ * RetrogenIntegrations) and hands the current chunk selection to one of
+ * them. Reached from the Retrogen button on the map screen, so the targets
+ * are whatever was selected there - one chunk or a hundred.
  */
 public class RetrogenScreen extends Screen {
-	private final Screen parent;
-	private final MinecraftServer server;
-	private final UUID playerId;
-	private final ChunkPos target;
+	private final ChunkMapScreen parent;
+	private final List<ChunkPos> targets;
 	private final List<RetrogenIntegration> integrations;
 
-	public RetrogenScreen(Screen parent, MinecraftServer server, UUID playerId, ChunkPos target, List<RetrogenIntegration> integrations) {
-		super(Component.translatable("gui.retrograde.retrogen.title", chunkX(target), chunkZ(target)));
+	public RetrogenScreen(ChunkMapScreen parent, List<ChunkPos> targets, List<RetrogenIntegration> integrations) {
+		super(Component.translatable("gui.retrograde.retrogen.title", targets.size()));
 		this.parent = parent;
-		this.server = server;
-		this.playerId = playerId;
-		this.target = target;
+		this.targets = targets;
 		this.integrations = integrations;
 	}
 
@@ -53,14 +46,14 @@ public class RetrogenScreen extends Screen {
 		openScreen(new ConfirmScreen(
 			confirmed -> {
 				if (confirmed) {
-					ServerPlayer player = server.getPlayerList().getPlayer(playerId);
-					if (player != null) {
-						RetrogenService.run(server, player, integration, target);
-					}
+					// Hands off to the map screen, which owns the job and the
+					// progress screen that drives it.
+					parent.startRetrogenJob(targets, integration);
+				} else {
+					openScreen(parent);
 				}
-				openScreen(parent);
 			},
-			Component.translatable("gui.retrograde.retrogen.confirm", integration.displayName(), chunkX(target), chunkZ(target)),
+			Component.translatable("gui.retrograde.retrogen.confirm", integration.displayName(), targets.size()),
 			Component.translatable("gui.retrograde.retrogen.confirm.detail")
 		));
 	}
@@ -79,22 +72,6 @@ public class RetrogenScreen extends Screen {
 		/*minecraft.gui.setScreen(screen);
 		*///?} else {
 		minecraft.setScreen(screen);
-		//?}
-	}
-
-	private static int chunkX(ChunkPos pos) {
-		//? if >=26 {
-		/*return pos.x();
-		*///?} else {
-		return pos.x;
-		//?}
-	}
-
-	private static int chunkZ(ChunkPos pos) {
-		//? if >=26 {
-		/*return pos.z();
-		*///?} else {
-		return pos.z;
 		//?}
 	}
 

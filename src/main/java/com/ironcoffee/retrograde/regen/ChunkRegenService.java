@@ -10,7 +10,6 @@ import net.minecraft.nbt.NbtIo;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerChunkCache;
 import net.minecraft.server.level.ServerLevel;
-import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.storage.LevelResource;
 
@@ -33,10 +32,12 @@ import java.util.stream.Stream;
  * ChunkGenerator pipeline ourselves would mean replicating Mojang's
  * neighbor-chunk bookkeeping, so we let vanilla do that part.
  *
- * A chunk won't visibly regenerate while a player is standing on or next
- * to it, since its chunk holder has to unload first. Callers should wait
- * for the player to step away (see isPlayerNear) instead of expecting an
- * instant result.
+ * The one hard requirement is that the chunk must not be loaded when we
+ * write: a loaded chunk holder saves itself back out when it eventually
+ * unloads, quietly clobbering the tag we just wrote. So both entry points
+ * refuse while the chunk is in memory (see isLoaded), and it's the
+ * caller's job to get it unloaded first - ChunkRegenJob does that by
+ * moving the player out of range and waiting.
  *
  * ChunkMap's storage class was renamed ChunkStorage -> SimpleRegionStorage
  * between 1.20.1 and 26.x, and write() became async. Neither matters here
@@ -50,14 +51,14 @@ public final class ChunkRegenService {
 
 	public enum Result {
 		OK,
-		PLAYER_TOO_CLOSE,
+		CHUNK_LOADED,
 		NOTHING_TO_UNDO,
 		IO_ERROR
 	}
 
 	public static Result regenerate(ServerLevel level, ChunkPos pos) {
-		if (isPlayerNear(level, pos)) {
-			return Result.PLAYER_TOO_CLOSE;
+		if (isLoaded(level, pos)) {
+			return Result.CHUNK_LOADED;
 		}
 		ServerChunkCache chunkSource = level.getChunkSource();
 		try {
@@ -74,8 +75,8 @@ public final class ChunkRegenService {
 	}
 
 	public static Result undo(ServerLevel level, ChunkPos pos) {
-		if (isPlayerNear(level, pos)) {
-			return Result.PLAYER_TOO_CLOSE;
+		if (isLoaded(level, pos)) {
+			return Result.CHUNK_LOADED;
 		}
 		Path snapshot = latestSnapshot(level, pos);
 		if (snapshot == null) {
@@ -96,18 +97,19 @@ public final class ChunkRegenService {
 		return latestSnapshot(level, pos) != null;
 	}
 
-	private static boolean isPlayerNear(ServerLevel level, ChunkPos pos) {
-		for (ServerPlayer player : level.players()) {
-			//? if >=26 {
-			/*ChunkPos playerChunk = ChunkPos.containing(player.blockPosition());
-			*///?} else {
-			ChunkPos playerChunk = new ChunkPos(player.blockPosition());
-			//?}
-			if (playerChunk.getChessboardDistance(pos) <= 1) {
-				return true;
-			}
-		}
-		return false;
+	/**
+	 * Whether the chunk is currently in memory. This is the real gate on
+	 * regenerating - a loaded chunk will save itself over our on-disk edit -
+	 * and it's also strictly more accurate than asking how close a player
+	 * is, since chunks stay loaded well past a player's immediate
+	 * neighbours (view distance, forced chunks, spawn chunks).
+	 */
+	public static boolean isLoaded(ServerLevel level, ChunkPos pos) {
+		//? if >=26 {
+		/*return level.getChunkSource().hasChunk(pos.x(), pos.z());
+		*///?} else {
+		return level.getChunkSource().hasChunk(pos.x, pos.z);
+		//?}
 	}
 
 	private static CompoundTag emptyChunkTag(ChunkPos pos) {
