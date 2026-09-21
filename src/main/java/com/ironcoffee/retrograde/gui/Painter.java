@@ -216,33 +216,116 @@ final class Painter {
 		fill(x, thumbY, x + w, thumbY + thumbH, thumbColor);
 	}
 
+	/** Teeth on {@link #gearIcon}. Six, not the usual eight: at the ~14px a
+	 * toolbar button gives you, eight teeth land under 2px apart and blur into
+	 * a scalloped ring. Six stay separate enough to read as teeth. */
+	private static final int GEAR_TEETH = 6;
+	/** Where the valley between two teeth sits, as a fraction of the radius. */
+	private static final double GEAR_ROOT = 0.66;
+	/** The hub bore, as a fraction of the radius. Generous on purpose: a
+	 * pinhole hub disappears at toolbar size and leaves a cog-shaped blob,
+	 * and the hole is most of what makes a gear read as a gear. */
+	private static final double GEAR_HUB = 0.40;
+	/** Half-width of a tooth at its root and at its tip, as a fraction of the
+	 * angular pitch. Tip narrower than root, so teeth taper outward the way a
+	 * real involute tooth does instead of reading as square pegs. */
+	private static final double GEAR_TOOTH_ROOT = 0.30;
+	private static final double GEAR_TOOTH_TIP = 0.18;
+	/** Supersampling grid per pixel. 4x4 gives 17 coverage steps, which is
+	 * more than enough to hide the stair-stepping at this size. */
+	private static final int GEAR_SAMPLES = 4;
+
 	/**
-	 * A real gear, not a glyph from the font - drawn as a filled disc, eight
-	 * square teeth at the compass points, and a punched-out hub hole for
-	 * depth. All three are row-span fills, so the silhouette is exact at
-	 * any radius instead of a character that goes fuzzy or lopsided as the
-	 * GUI scale changes underneath it.
+	 * A gear, rasterised in polar coordinates with supersampled coverage
+	 * rather than assembled out of stamped shapes.
+	 *
+	 * The previous version - a disc with eight squares dropped on the
+	 * circumference - was the obvious construction and it looks like a lump,
+	 * because square teeth centred on a curve merge into the disc on the
+	 * diagonals and stick out on the axes. So instead: for each pixel, sample
+	 * a 4x4 grid, ask each sample whether it's inside the gear's polar
+	 * boundary, and fill the pixel at an alpha proportional to how many
+	 * samples said yes. The edge gets antialiased for free, the teeth stay
+	 * the same shape all the way round, and the silhouette holds up at any
+	 * radius because nothing here is a fixed-size stamp.
+	 *
+	 * {@code color} is the gear body; {@code holeColor} fills the hub bore.
+	 * Both carry their own alpha, which coverage scales down at the edges.
 	 */
 	void gearIcon(int centerX, int centerY, int radius, int color, int holeColor) {
-		filledCircle(centerX, centerY, radius, color);
-		int toothSize = Math.max(2, radius / 2);
-		double[] angles = {0, 45, 90, 135, 180, 225, 270, 315};
-		for (double degrees : angles) {
-			double rad = Math.toRadians(degrees);
-			int tx = centerX + (int) Math.round(Math.cos(rad) * radius);
-			int ty = centerY + (int) Math.round(Math.sin(rad) * radius);
-			fill(tx - toothSize / 2, ty - toothSize / 2, tx - toothSize / 2 + toothSize, ty - toothSize / 2 + toothSize, color);
+		if (radius <= 0) return;
+
+		double rootRadius = radius * GEAR_ROOT;
+		double hubRadius = radius * GEAR_HUB;
+		double pitch = Math.PI * 2 / GEAR_TEETH;
+		double toothRoot = pitch * GEAR_TOOTH_ROOT;
+		double toothTip = pitch * GEAR_TOOTH_TIP;
+
+		int bodyAlpha = (color >>> 24) & 0xFF;
+		int bodyRgb = color & 0xFFFFFF;
+		int holeAlpha = (holeColor >>> 24) & 0xFF;
+		int holeRgb = holeColor & 0xFFFFFF;
+
+		int total = GEAR_SAMPLES * GEAR_SAMPLES;
+		double step = 1.0 / GEAR_SAMPLES;
+		double first = step / 2.0;
+
+		for (int py = centerY - radius; py < centerY + radius; py++) {
+			// Horizontal runs of equal coverage are common - the flat top of
+			// the gear, the inside of the hub - so accumulate them and emit
+			// one fill() per run instead of one per pixel.
+			int runStart = 0, runBody = -1, runHub = -1;
+			for (int px = centerX - radius; px <= centerX + radius; px++) {
+				int bodyHits = 0, hubHits = 0;
+				if (px < centerX + radius) {
+					for (int sy = 0; sy < GEAR_SAMPLES; sy++) {
+						double dy = py + first + sy * step - centerY;
+						for (int sx = 0; sx < GEAR_SAMPLES; sx++) {
+							double dx = px + first + sx * step - centerX;
+							double r = Math.sqrt(dx * dx + dy * dy);
+							if (r > radius) continue;
+							if (r > rootRadius) {
+								// Out in the tooth band: inside only if this
+								// sample falls within the tooth's angular
+								// window, which narrows as it goes outward.
+								double t = (r - rootRadius) / (radius - rootRadius);
+								double half = toothRoot + (toothTip - toothRoot) * t;
+								double angle = Math.atan2(dy, dx);
+								double within = angle - Math.floor(angle / pitch) * pitch;
+								if (Math.min(within, pitch - within) > half) continue;
+							}
+							bodyHits++;
+							if (r <= hubRadius) hubHits++;
+						}
+					}
+				}
+				if (bodyHits != runBody || hubHits != runHub) {
+					emitGearRun(runStart, px, py, runBody, runHub, total, bodyAlpha, bodyRgb, holeAlpha, holeRgb);
+					runStart = px;
+					runBody = bodyHits;
+					runHub = hubHits;
+				}
+			}
+			emitGearRun(runStart, centerX + radius, py, runBody, runHub, total, bodyAlpha, bodyRgb, holeAlpha, holeRgb);
 		}
-		int hubRadius = Math.max(1, radius / 3);
-		filledCircle(centerX, centerY, hubRadius, holeColor);
 	}
 
-	private void filledCircle(int centerX, int centerY, int radius, int color) {
-		for (int dy = -radius; dy <= radius; dy++) {
-			double dx = Math.sqrt(Math.max(0, (double) radius * radius - (double) dy * dy));
-			int span = (int) Math.round(dx);
-			if (span <= 0) continue;
-			fill(centerX - span, centerY + dy, centerX + span, centerY + dy + 1, color);
+	/** One horizontal run of {@link #gearIcon} pixels that share a coverage. */
+	private void emitGearRun(int x1, int x2, int y, int bodyHits, int hubHits, int total,
+			int bodyAlpha, int bodyRgb, int holeAlpha, int holeRgb) {
+		if (x2 <= x1 || bodyHits <= 0) return;
+		int alpha = bodyAlpha * bodyHits / total;
+		if (alpha > 0) {
+			fill(x1, y, x2, y + 1, (alpha << 24) | bodyRgb);
+		}
+		if (hubHits > 0) {
+			// Drawn over the body rather than instead of it, so a partly
+			// covered hub edge blends into the gear instead of into whatever
+			// happens to be behind the button.
+			int hub = holeAlpha * hubHits / total;
+			if (hub > 0) {
+				fill(x1, y, x2, y + 1, (hub << 24) | holeRgb);
+			}
 		}
 	}
 }

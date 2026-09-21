@@ -22,6 +22,7 @@ import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.Items;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Block;
@@ -74,6 +75,8 @@ public class ChunkMapScreen extends Screen {
 	private static final int CHIP_MARGIN = 8;
 	private static final int ICON_SIZE = 20;
 	private static final int ICON_GAP = 4;
+	/** Vanilla renders every item icon at 16x16; nothing lets you ask for another size. */
+	private static final int ITEM_ICON_SIZE = 16;
 	private static final int TITLE_PAD_H = 8;
 	private static final int TITLE_PAD_V = 4;
 	private static final int MIN_ZOOM = -2;
@@ -287,15 +290,30 @@ public class ChunkMapScreen extends Screen {
 	 * has to go.
 	 */
 	private enum MapMode {
-		TERRAIN("■"),
+		// Where an item says it better than a letter, use the item. A grass
+		// block *is* what the terrain mode draws, and an ore block *is* what
+		// the ore mode counts, so those two get read without the tooltip; the
+		// remaining two are abstractions with no block to point at, and a
+		// letter is honest about that rather than picking a vaguely
+		// nature-coloured item and hoping.
+		TERRAIN(Items.GRASS_BLOCK),
 		BIOME("B"),
-		ORES("O"),
+		ORES(Items.DIAMOND_ORE),
 		TOUCHED("T");
 
-		final String icon;
+		/** Shown on the button when there's no {@link #item}; null otherwise. */
+		final String letter;
+		/** Rendered over the button in place of a label; null when {@link #letter} is used. */
+		final ItemStack item;
 
-		MapMode(String icon) {
-			this.icon = icon;
+		MapMode(String letter) {
+			this.letter = letter;
+			this.item = null;
+		}
+
+		MapMode(net.minecraft.world.item.Item item) {
+			this.letter = null;
+			this.item = new ItemStack(item);
 		}
 	}
 
@@ -401,8 +419,10 @@ public class ChunkMapScreen extends Screen {
 		// Cycles rather than opening a picker: there are four modes, switching
 		// between them is something you do while comparing, and a menu between
 		// each comparison is a menu you stop using.
-		mapModeButton = addRenderableWidget(Button.builder(Component.literal(mapMode.icon), b -> cycleMapMode())
+		mapModeButton = addRenderableWidget(Button.builder(Component.empty(), b -> cycleMapMode())
 			.bounds(x, clusterY, ICON_SIZE, ICON_SIZE).build());
+		// Sets the real label and tooltip; the builder's is a placeholder
+		// because what goes there depends on which mode is current.
 		syncMapModeButton();
 		x += ICON_SIZE + ICON_GAP;
 		// Empty label: the gear itself is drawn in drawIconOverlays(), a real
@@ -814,10 +834,17 @@ public class ChunkMapScreen extends Screen {
 	 * it doesn't need to duck under one.
 	 */
 	private void drawIconOverlays(Painter painter) {
+		if (mapModeButton != null && mapMode.item != null) {
+			// Items always render 16x16 regardless of the button, so centre
+			// rather than assuming the two sizes agree.
+			painter.item(mapMode.item,
+				mapModeButton.getX() + (mapModeButton.getWidth() - ITEM_ICON_SIZE) / 2,
+				mapModeButton.getY() + (mapModeButton.getHeight() - ITEM_ICON_SIZE) / 2);
+		}
 		if (settingsButton == null) return;
 		int cx = settingsButton.getX() + settingsButton.getWidth() / 2;
 		int cy = settingsButton.getY() + settingsButton.getHeight() / 2;
-		int radius = Math.max(4, Math.min(settingsButton.getWidth(), settingsButton.getHeight()) / 2 - 4);
+		int radius = Math.max(4, Math.min(settingsButton.getWidth(), settingsButton.getHeight()) / 2 - 3);
 		painter.gearIcon(cx, cy, radius, COLOR_GEAR_ICON, COLOR_GEAR_HOLE);
 	}
 
@@ -956,7 +983,10 @@ public class ChunkMapScreen extends Screen {
 
 	private void syncMapModeButton() {
 		if (mapModeButton == null) return;
-		mapModeButton.setMessage(Component.literal(mapMode.icon));
+		// An item-icon mode gets an empty label and is drawn in
+		// drawIconOverlays(); a letter mode keeps the button's own text so it
+		// picks up the hover and disabled tints for free.
+		mapModeButton.setMessage(mapMode.letter == null ? Component.empty() : Component.literal(mapMode.letter));
 		// The tooltip names the mode you're in rather than the one you'd get by
 		// clicking. A cycling button with four stops can't usefully promise
 		// where it lands, and "what am I looking at" is the question someone
