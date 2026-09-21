@@ -137,3 +137,25 @@
   and the panel starts from the top margin rather than below the icon cluster
   if that's what it takes to fit. No filter row is droppable the way the ore
   grid's were - a filter missing a criterion quietly can't answer a question
+- Fixed slime and touched tints (and the slime edge outline) painting over
+  chunks the map hasn't actually read yet - a grey "nothing generated" or
+  still-loading square no longer wears a green wash that describes data it
+  doesn't have. The player-position marker is unaffected; it answers "where
+  am I", not "what's in this chunk"
+- Redrew the settings gear as an actual gear (Painter's new gearIcon) instead
+  of the ⚙ font glyph, which went fuzzy or lopsided depending on the font pack
+- Chunk Manipulation is now an overlay drawn over the still-visible map
+  instead of a screen swap, and shows the whole selection at a glance:
+  chunk/touched/undoable counts, ore tallied across the entire selection, and
+  a biome breakdown, above a compact row of actions. Replaces the old
+  Chunk Manipulation screen
+- Settings is now an overlay too, in the same visual language, grouped into
+  sections with dividers instead of one flat list of rows. Replaces the old
+  settings screen
+- Removed the ore breakdown toggle and its side panel; the info panel's ore
+  list is scrollable in place instead, with a visible scrollbar
+- Escape now closes the topmost open overlay before it closes the map
+- Extended Painter with roundedPanel, dropShadow, glowEdge, divider,
+  scrollbar and gearIcon primitives, plus scissor clipping, so every panel
+  and overlay in the mod is drawn through the same reusable, code-drawn
+  building blocks instead of ad hoc fill() calls per screen

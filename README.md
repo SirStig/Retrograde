@@ -46,6 +46,12 @@ nothing has ever generated there. Biome and ore data come out of that same
 read and are cached alongside the terrain, so any chunk the map has drawn
 can also be described and searched.
 
+The visited wash and slime tint only appear once a chunk has actually been
+read — a grey or still-loading square never wears either, since both
+describe what's in the chunk and a grey square has nothing to describe yet.
+Your own position is the exception: it's marked the moment you're standing
+there, read or not.
+
 ### Colour modes
 
 An icon in the top-right cluster cycles what the squares are coloured by:
@@ -68,10 +74,11 @@ which they can't while the terrain underneath is still doing its job.
 Two panels sit down the left side.
 
 The upper one describes whichever chunk is under the cursor: coordinates,
-visited or not, biome, and an ore tally as icons. It stays a fixed size in a
-fixed place so it never covers the chunks you're trying to read. The icon
-grid has room for six ores, so a toggle beside the heading opens the full
-breakdown — every ore with its name and count — in a panel alongside.
+visited or not, biome, and an ore tally. It stays a fixed size in a fixed
+place so it never covers the chunks you're trying to read. The ore list is
+every ore in the chunk, not a capped preview — hover it and scroll to move
+through the list, with a scrollbar down the side so there's something to
+grab if you'd rather drag than scroll.
 
 The lower one is the selection. Shift-drag to box-select a region, ctrl-drag
 to deselect, click to toggle a single chunk, then pick **Chunk
@@ -80,10 +87,10 @@ outlined, and the panel reports how many are selected and how many of those
 you've visited. The cap is 256 chunks per selection.
 
 Both panels size themselves to the window rather than to fixed numbers: they
-shrink toward a floor, the ore icon grid drops to a single row and then
-disappears on a short window, and the ore/filter panel moves to the right
-edge — or over the left column on a very small window — instead of taking
-another bite out of the middle.
+shrink toward a floor, the ore list's visible rows drop to a minimum on a
+short window, and the filter panel moves to the right edge — or over the
+left column on a very small window — instead of taking another bite out of
+the middle.
 
 ### Find
 
@@ -103,11 +110,16 @@ back.
 
 ## Chunk Manipulation
 
-Everything that changes a chunk lives behind one button: Regenerate, Undo,
-another mod's Retrogen, and whatever else is switched on. It's a menu rather
-than five buttons so the action panel stays two rows tall however long that
-list grows, and because operations that rewrite your world deserve a screen
-that can explain them.
+Everything that changes a chunk lives behind one button, which opens an
+inspector panel over the map rather than switching away to another screen —
+the map, and the selection tinted on it, stay visible the whole time. It
+reports the shape of the whole selection: how many chunks, how many you've
+built in, how many have an undo snapshot, the ore tallied across every
+chunk in the selection (not per chunk), and a breakdown of which biomes
+you've selected — then a compact row of actions: Regenerate, Undo,
+another mod's Retrogen, and biome editing when it's switched on. Escape, or
+the panel's own close button, puts it away without touching the selection
+underneath.
 
 **Regenerate** opens a preview rather than a yes/no box, since it's the one
 action here that destroys work: how many chunks, how many you've built in,
@@ -147,10 +159,11 @@ would produce a silently half-regenerated chunk instead of an honest skip.
 
 ## Settings
 
-The gear in the icon cluster opens settings: slime chunk display,
-confirmation on destructive actions, the opaque progress backdrop, how long a
-job waits for a chunk to unload, and how long it may stall before the
-watchdog intervenes. Settings are stored in `config/retrograde.properties`.
+The gear in the icon cluster opens a settings panel over the map: slime
+chunk display, confirmation on destructive actions, the opaque progress
+backdrop, how long a job waits for a chunk to unload, and how long it may
+stall before the watchdog intervenes. Settings are stored in
+`config/retrograde.properties`.
 
 There's also a master switch for operations that can hand you things you
 didn't earn. It's off by default, and while it's off those operations aren't
@@ -183,7 +196,7 @@ different button in the same menu.
 | Click | Toggle a chunk's selection |
 | Shift-drag | Box-select |
 | Ctrl-drag | Box-deselect |
-| Escape | Close, or climb the cancel ladder during a job |
+| Escape | Close the topmost open panel, then the map, or climb the cancel ladder during a job |
 
 ## Building
 
