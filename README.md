@@ -11,7 +11,7 @@ to an existing world. That isn't knowable without re-running world
 generation. What it does instead is show you where you've been, what's in
 it, and give you a way to act on a selection of it.
 
-**Status: alpha. Singleplayer only.**
+**Beta. Singleplayer only.**
 
 ## Supported versions
 
@@ -22,7 +22,7 @@ it, and give you a way to act on a selection of it.
 | 26.3 | Fabric, NeoForge |
 
 1.20.1 pairs with Forge rather than NeoForge because the split didn't happen
-until 1.20.2. NeoForge for 26.3 is still beta upstream.
+until 1.20.2.
 
 ## The map
 
@@ -116,10 +116,10 @@ the map, and the selection tinted on it, stay visible the whole time. It
 reports the shape of the whole selection: how many chunks, how many you've
 built in, how many have an undo snapshot, the ore tallied across every
 chunk in the selection (not per chunk), and a breakdown of which biomes
-you've selected — then a compact row of actions: Regenerate, Undo,
-another mod's Retrogen, and biome editing when it's switched on. Escape, or
-the panel's own close button, puts it away without touching the selection
-underneath.
+you've selected — then a compact row of actions: Regenerate, Undo, another
+mod's Retrogen, and — when they're switched on — ore and biome editing.
+Escape, or the panel's own close button, puts it away without touching the
+selection underneath.
 
 **Regenerate** opens a preview rather than a yes/no box, since it's the one
 action here that destroys work: how many chunks, how many you've built in,
@@ -129,7 +129,7 @@ and the ore tallied across the whole selection.
 **Retrogen** wraps another mod's own retrogen command so you don't have to
 leave the map to use it. Mekanism is the only integration so far.
 
-All three run over the whole selection behind a progress screen — phase,
+Everything runs over the whole selection behind a progress screen — phase,
 progress bar, current chunk, and done/skipped/failed counts. A loaded chunk
 saves itself back over any edit, so rather than refusing to run, the job
 parks you above the build height clear of the selection, waits for the
@@ -184,6 +184,21 @@ Nothing moves: a desert turned swamp is a desert with swamp fog, mob spawns
 and grass colour. Reshaping the terrain to match is a regen, which is a
 different button in the same menu.
 
+**Ore editing** (behind the same switch) adds a **Regen ores** action that
+re-runs the world's own underground-ore features over the selection. It
+doesn't scatter ore blocks into a finished chunk — it asks the biomes in
+that chunk which ore features they generate and runs exactly those through
+vanilla's placement code, so you get real veins at real depths in the right
+stone type, checked against the biome at each position.
+
+What it's for is ore from a mod or datapack you installed after those chunks
+were written. It isn't a bit-exact replay of the original pass — Minecraft
+keeps the feature ordering that would make that possible behind a private
+field — so ore that already generated gets a second, separate set of veins
+rather than the same ones back. On an established world, expect more ore
+than it rolled. Running it twice places the same veins rather than stacking
+more, and there's no undo for it, which is why it's off by default.
+
 ## Controls
 
 | Input | Action |
@@ -219,6 +234,7 @@ task-ordering check.
 - Mekanism is the only retrogen integration.
 - Regen is all-or-nothing. It can't keep your builds and redo the terrain
   around them; see [ROADMAP.md](ROADMAP.md) for what that would take.
+- Regen ores has no undo, and can't remove ore.
 
 ## Credit
 

@@ -42,32 +42,28 @@ doesn't need any of the above: a mod's native retrogen (see
 RetrogenIntegration) already works by re-running just that mod's
 registered ore features against the existing chunk, not full regen. The
 retrogen wrapper already covers this for whatever mods have their own
-retrogen command. A vanilla-ore equivalent (re-run just the vanilla ore
-configured features) follows the same shape without needing the
-block-tracking or shadow-level machinery at all, and is now built - see
-"Ore editing" below. It was a good first step before attempting the general
-"regen only X" version above, being a much smaller piece of the eventual
-full design that's independently useful on its own. "Only structures" or "only new biomes" would need the harder,
+retrogen command. The vanilla-ore equivalent follows the same shape without needing the
+block-tracking or shadow-level machinery at all, and is what "Regen ores"
+does - see "Ore editing" below. "Only structures" or "only new biomes" would need the harder,
 full block-diff version, since those aren't feature-reruns in the same
 way, and "only new biomes" would additionally need snapshotting what
 generator settings were active when a chunk was first generated, which
 isn't tracked anywhere right now.
 
-## Ore editing - done
+## Ore editing
 
-Built as the vanilla-ore retrogen argued for below, not as ore editing.
-See OreRetrogenService; the Chunk Manipulation menu grows a "Regen ores"
-row when the setting is on.
+"Regen ores" is a feature rerun, not ore editing. See OreRetrogenService.
 
-The obvious implementation - scatter ore blocks into an already-generated
-chunk - produces something that doesn't look like worldgen (wrong vein
-shapes, wrong depth distribution, no respect for the biome or the
-surrounding stone type) and can't be undone precisely, since regen's undo
-snapshot is per-chunk and would roll back everything else too. So it
-doesn't place ore at all: it asks the biome for the placed features it
-would have run in the UNDERGROUND_ORES decoration step and runs exactly
-those through vanilla's own placement code, the same way the Mekanism
-integration re-runs Mekanism's. Real veins in real places, for free.
+Editing ore directly - scattering ore blocks into an already-generated
+chunk until some number is hit - produces something that doesn't look like
+worldgen (wrong vein shapes, wrong depth distribution, no respect for the
+biome or the surrounding stone type) and can't be undone precisely, since
+regen's undo snapshot is per-chunk and would roll back everything else too.
+So it doesn't place ore at all: it asks the biomes in the chunk for the
+placed features they run in the UNDERGROUND_ORES decoration step and runs
+exactly those through vanilla's own placement code, the same way the
+Mekanism integration re-runs Mekanism's. Real veins in real places, for
+free.
 
 ### The one thing that isn't a bit-exact replay
 
@@ -92,15 +88,15 @@ If bit-exact replay is ever wanted - so that an untouched chunk really is a
 no-op - that's the accessor mixin, and it should be decided as its own
 piece of work rather than smuggled in.
 
-"Less ore" is still not implemented and still probably shouldn't be -
+"Less ore" is deliberately absent and probably should stay that way -
 removing ore from a chunk you may have already mined is a diff problem, not
 a generation one.
 
 ## What the progress screen still can't survive
 
-The cancel ladder, the watchdog and the force-load fallback are built (see
-ChunkRegenJob and RegenProgressScreen), and between them they cover a
-server thread that stops answering. What they don't cover is the client
+The cancel ladder, the watchdog and the force-load fallback (see
+ChunkRegenJob and RegenProgressScreen) between them cover a server thread
+that stops answering. What they don't cover is the client
 going away: a crash, an OOM kill, or pulling the power mid-regen still
 leaves the player at the staging position above the build height, with
 gravity and damage off and the remaining chunks unprocessed, because the
