@@ -85,6 +85,10 @@ public class ChunkMapScreen extends Screen {
 	// AbstractWidget treats button 1 as the left button on 26.3 and button 0
 	// on everything before it, which is how this was pinned down. Printable
 	// keys are ASCII either way, so '-' and '=' are shared.
+	// Letters are the one place the two eras disagree about ASCII: GLFW reports
+	// them uppercase, SDL lowercase. Checked against vanilla rather than
+	// assumed - InputWithModifiers#isCopy compares its shortcut key to 99 on
+	// 26.3, and InputConstants.KEY_A is 65 on 26.1.
 	//? if >=26.3 {
 	/*private static final int BUTTON_LEFT = 1;
 	private static final int BUTTON_MIDDLE = 2;
@@ -95,6 +99,10 @@ public class ChunkMapScreen extends Screen {
 	private static final int KEY_UP = 1073741906;
 	private static final int KEY_KP_SUBTRACT = 1073741910;
 	private static final int KEY_KP_ADD = 1073741911;
+	private static final int KEY_W = 119;
+	private static final int KEY_A = 97;
+	private static final int KEY_S = 115;
+	private static final int KEY_D = 100;
 	*///?} else {
 	private static final int BUTTON_LEFT = 0;
 	private static final int BUTTON_RIGHT = 1;
@@ -105,6 +113,10 @@ public class ChunkMapScreen extends Screen {
 	private static final int KEY_UP = 265;
 	private static final int KEY_KP_SUBTRACT = 333;
 	private static final int KEY_KP_ADD = 334;
+	private static final int KEY_W = 87;
+	private static final int KEY_A = 65;
+	private static final int KEY_S = 83;
+	private static final int KEY_D = 68;
 	//?}
 	private static final int KEY_MINUS = 45;
 	private static final int KEY_EQUAL = 61;
@@ -188,7 +200,12 @@ public class ChunkMapScreen extends Screen {
 	private double cameraBlockZ;
 	private int zoomLevel = 0;
 
-	private enum DragMode { NONE, PAN, SELECT_ADD, SELECT_REMOVE }
+	/**
+	 * PAN_OR_CLICK is a bare left press, which won't know which it was until
+	 * the button comes back up: it pans while it's held, and if it never
+	 * travelled it turns out to have been a click on one chunk.
+	 */
+	private enum DragMode { NONE, PAN, PAN_OR_CLICK, SELECT_ADD, SELECT_REMOVE }
 
 	private DragMode dragMode = DragMode.NONE;
 	private double dragTotalDistance;
@@ -1389,7 +1406,7 @@ public class ChunkMapScreen extends Screen {
 	/*@Override
 	public boolean mouseClicked(net.minecraft.client.input.MouseButtonEvent event, boolean doubleClick) {
 		if (super.mouseClicked(event, doubleClick)) return true;
-		return handlePress(event.x(), event.y(), event.button(), event.hasControlDown());
+		return handlePress(event.x(), event.y(), event.button(), event.hasControlDown(), event.hasShiftDown());
 	}
 
 	@Override
@@ -1413,7 +1430,7 @@ public class ChunkMapScreen extends Screen {
 	@Override
 	public boolean mouseClicked(double mouseX, double mouseY, int button) {
 		if (super.mouseClicked(mouseX, mouseY, button)) return true;
-		return handlePress(mouseX, mouseY, button, Screen.hasControlDown());
+		return handlePress(mouseX, mouseY, button, Screen.hasControlDown(), Screen.hasShiftDown());
 	}
 
 	@Override
@@ -1463,12 +1480,17 @@ public class ChunkMapScreen extends Screen {
 	//?}
 
 	/**
-	 * Left button selects, right and middle pan. Selecting is the thing this
-	 * screen exists for, so it gets the button people reach for first, and
-	 * panning moves to the one every map and RTS puts it on anyway. Ctrl
-	 * flips a left-drag from selecting to deselecting.
+	 * A bare left-drag pans, because that's what dragging a map does
+	 * everywhere else and a map that fights you on it feels broken. Box-select
+	 * is the same drag with shift held, and ctrl makes it deselect instead.
+	 * Right and middle still pan, for anyone already used to it.
+	 *
+	 * A left-click that doesn't travel far enough to count as a drag still
+	 * toggles the chunk under it, modifier or not: it isn't a drag, so there's
+	 * nothing for it to be ambiguous with, and needing a modifier to pick one
+	 * chunk would be a strange thing to have to learn.
 	 */
-	private boolean handlePress(double mouseX, double mouseY, int button, boolean ctrlDown) {
+	private boolean handlePress(double mouseX, double mouseY, int button, boolean ctrlDown, boolean shiftDown) {
 		if (!isOverMap(mouseX, mouseY)) return false;
 		pressScreenX = dragScreenX = mouseX;
 		pressScreenY = dragScreenY = mouseY;
@@ -1476,21 +1498,31 @@ public class ChunkMapScreen extends Screen {
 		if (button == BUTTON_RIGHT || button == BUTTON_MIDDLE) {
 			dragMode = DragMode.PAN;
 		} else if (button == BUTTON_LEFT) {
-			dragMode = ctrlDown ? DragMode.SELECT_REMOVE : DragMode.SELECT_ADD;
+			if (ctrlDown) {
+				dragMode = DragMode.SELECT_REMOVE;
+			} else if (shiftDown) {
+				dragMode = DragMode.SELECT_ADD;
+			} else {
+				dragMode = DragMode.PAN_OR_CLICK;
+			}
 		} else {
 			return false;
 		}
 		return true;
 	}
 
-	/** Keyboard panning and zoom, so the map is usable without a mouse at all. */
+	/**
+	 * Keyboard panning and zoom, so the map is usable without a mouse at all.
+	 * WASD alongside the arrows because that's the hand position you arrived
+	 * in - and there's no text field on this screen for them to be stolen from.
+	 */
 	private boolean handleKey(int keyCode) {
 		double step = KEY_PAN_PIXELS / pixelsPerBlock();
 		switch (keyCode) {
-			case KEY_LEFT -> cameraBlockX -= step;
-			case KEY_RIGHT -> cameraBlockX += step;
-			case KEY_UP -> cameraBlockZ -= step;
-			case KEY_DOWN -> cameraBlockZ += step;
+			case KEY_LEFT, KEY_A -> cameraBlockX -= step;
+			case KEY_RIGHT, KEY_D -> cameraBlockX += step;
+			case KEY_UP, KEY_W -> cameraBlockZ -= step;
+			case KEY_DOWN, KEY_S -> cameraBlockZ += step;
 			case KEY_EQUAL, KEY_KP_ADD -> adjustZoom(1);
 			case KEY_MINUS, KEY_KP_SUBTRACT -> adjustZoom(-1);
 			default -> {
@@ -1505,7 +1537,7 @@ public class ChunkMapScreen extends Screen {
 		dragScreenX = mouseX;
 		dragScreenY = mouseY;
 		dragTotalDistance += Math.abs(dragX) + Math.abs(dragY);
-		if (dragMode == DragMode.PAN) {
+		if (dragMode == DragMode.PAN || dragMode == DragMode.PAN_OR_CLICK) {
 			cameraBlockX -= dragX / pixelsPerBlock();
 			cameraBlockZ -= dragY / pixelsPerBlock();
 		}
@@ -1532,6 +1564,10 @@ public class ChunkMapScreen extends Screen {
 			toggleSelection(chunkAt(mouseX, mouseY));
 			return true;
 		}
+
+		// It travelled, so the bare press was a pan after all and there's no
+		// box to apply.
+		if (mode == DragMode.PAN_OR_CLICK) return true;
 
 		dragScreenX = mouseX;
 		dragScreenY = mouseY;

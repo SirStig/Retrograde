@@ -66,3 +66,7 @@
   the ore tallied across the whole selection
 - Map keybinding now defaults to O instead of being unbound, picked for not
   colliding with the common minimap/JEI/Curios bindings
+- WASD pans the map alongside the arrow keys
+- A bare left-drag pans again, the way dragging a map does everywhere else;
+  box-select moved onto shift-drag. Click-to-toggle and ctrl-drag-to-deselect
+  are unchanged

@@ -9,8 +9,8 @@
   "gui.retrograde.chunk_map.close": "Close",
   "gui.retrograde.chunk_map.zoom_in": "Zoom in",
   "gui.retrograde.chunk_map.zoom_out": "Zoom out",
-  "gui.retrograde.chunk_map.controls_hint": "Drag: select area  ·  Click: select chunk  ·  Ctrl-drag: deselect  ·  Right-drag or arrows: pan  ·  Scroll: zoom",
-  "gui.retrograde.chunk_map.controls_hint_short": "Drag: select  ·  Right-drag: pan  ·  Scroll: zoom",
+  "gui.retrograde.chunk_map.controls_hint": "Drag or WASD: pan  ·  Click: select chunk  ·  Shift-drag: select area  ·  Ctrl-drag: deselect  ·  Scroll: zoom",
+  "gui.retrograde.chunk_map.controls_hint_short": "Drag: pan  ·  Shift-drag: select  ·  Scroll: zoom",
 
   "gui.retrograde.chunk_map.tooltip.you": "You are here",
   "gui.retrograde.chunk_map.tooltip.touched": "Touched",

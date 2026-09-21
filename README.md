@@ -65,14 +65,18 @@ toggle beside its heading opens the full breakdown - every ore with its name
 and count - in its own panel alongside, rather than leaving the rarest ones
 hidden behind a "+4" you can't do anything with.
 
-The one below it is the selection: left-drag to box-select a region,
+The one below it is the selection: shift-drag to box-select a region,
 ctrl-drag to deselect, click to toggle a single chunk, then pick Regenerate,
 Undo, Retrogen, Find or Clear. Selected chunks are tinted and outlined on the
 map, and the panel says how many are selected and how many of those you've
-touched. Panning is on right-drag and middle-drag (and the arrow keys, with
-+/- to zoom) rather than left-drag, since selecting is the thing you came to
-this screen to do. A click only counts if the mouse didn't move far enough to
-register as a drag, so selecting and panning don't fight each other.
+touched.
+
+A bare left-drag pans, which is what dragging a map does everywhere else; box
+selection is the same drag with shift held. Right-drag and middle-drag also
+pan, and so do WASD and the arrow keys, with +/- to zoom. A click only counts
+as a click if the mouse didn't move far enough to register as a drag, which is
+what lets one button be both "pan" and "toggle this chunk" without them
+fighting each other.
 
 Find opens a filter panel beside the info panel: pick a scope (what's on
 screen, within 4/8/16 chunks of you, or everywhere the map has read), then
