@@ -128,11 +128,17 @@ keyboard input only, so drag-to-pan, scroll-to-zoom, click-to-select,
 box-select, the ore breakdown toggle and every button on the filter panel
 have only compiling and a careful read of the code behind them.
 
-The saved-chunk reader is worth singling out: it decodes the region file's
-block and biome palettes by hand, and while the format it targets has been
-stable since 1.18 and it version-checks before trusting anything, it has not
-been pointed at a real world yet. A wrong bit width there shows up as
-garbled terrain, not as a crash. The 26.x `GuiGraphicsExtractor`
+The saved-chunk reader has now been pointed at real saves, and it needed it.
+It decodes the region file's palettes by hand, and the first version assumed
+the entry format was the same on every target; it isn't. 26.3 writes default
+block states as bare strings and keys the rest `id` rather than `Name`, so
+every 26.3 chunk decoded as solid air and drew as a black square with no
+biome and no ores. It now handles all four shapes, checked by decoding ~15,000
+palette entries out of a real 1.20.1 world and a real 26.3 one with zero
+unresolved; the packed-long bit widths were validated the same way over about
+600 sections. A format change here shows up as a silently wrong map rather
+than a crash, which is why it's now checked against saved worlds instead of
+reasoned about. The 26.x `GuiGraphicsExtractor`
 render path is compile-only as always - no Wayland-friendly way to launch
 26.1/26.3 and look at it yet.
 

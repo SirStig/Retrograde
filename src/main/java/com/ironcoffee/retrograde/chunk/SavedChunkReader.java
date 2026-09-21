@@ -5,7 +5,7 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
-import net.minecraft.nbt.Tag;
+import net.minecraft.nbt.StringTag;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.ChunkPos;
@@ -36,14 +36,19 @@ import java.util.concurrent.CompletableFuture;
  * exactly what doesn't work across this mod's version range: 26.x has
  * SerializableChunkData#parse, which is side-effect free and ideal, and
  * 1.20.1 has no equivalent at all - only ChunkSerializer#read, which wants a
- * PoiManager and mutates it on the way past. The saved format itself, on the
- * other hand, is identical on every target this mod builds for (verified
- * against the shipped classes, not assumed): the same "sections" ->
- * "block_states" -> "palette"/"data" layout, the same packed-long encoding,
- * unchanged since 1.18. So the format is the stable thing here and the API
- * around it is the moving one, which makes decoding it directly the less
- * fragile choice rather than the hackier one. All that's left version-split
- * is a handful of NBT accessors, which changed shape once, in 26.
+ * PoiManager and mutates it on the way past. So decoding the format directly
+ * is the less fragile of two awkward options, not a clean one.
+ *
+ * The container is the same everywhere - "sections" -> "block_states" ->
+ * "palette"/"data", with the same packed-long encoding, whose bit widths were
+ * checked against ~600 real sections across 1.20.1 and 26.3 without a
+ * mismatch. The palette *entries* are not: 26.3 made BlockState's codec
+ * {@code Codec.either(byNameCodec, FULL_CODEC)}, so default states became bare
+ * strings and the rest moved from {@code Name} to {@code id}. An earlier
+ * version of this class assumed otherwise and read every 26.3 chunk as solid
+ * air, which drew as black squares with no biome and no ores. See
+ * {@link #paletteName} - that method is the whole of the difference, and the
+ * reason nothing here should assume a shape it hasn't checked.
  *
  * Block states are resolved to {@code defaultBlockState()} and their
  * properties thrown away. Map color and ore-ness are both per-block in
@@ -108,7 +113,7 @@ public final class SavedChunkReader {
 		if (!isFullyGenerated(stringOf(root, "Status"))) return null;
 		if (intOf(root, "DataVersion") < MIN_DATA_VERSION) return null;
 
-		ListTag sectionTags = compoundList(root, "sections");
+		ListTag sectionTags = listOf(root, "sections");
 		if (sectionTags.isEmpty()) return null;
 
 		Map<Integer, Section> sections = new HashMap<>();
@@ -241,25 +246,55 @@ public final class SavedChunkReader {
 
 	private static Section readSection(CompoundTag sectionTag) {
 		CompoundTag blockStates = compoundOf(sectionTag, "block_states");
-		ListTag paletteTag = compoundList(blockStates, "palette");
+		ListTag paletteTag = listOf(blockStates, "palette");
 		if (paletteTag.isEmpty()) return null;
 
 		BlockState[] palette = new BlockState[paletteTag.size()];
 		for (int i = 0; i < palette.length; i++) {
-			palette[i] = blockFor(stringOf(compoundAt(paletteTag, i), "Name")).defaultBlockState();
+			palette[i] = blockFor(paletteName(paletteTag, i)).defaultBlockState();
 		}
 		// A single-entry palette carries no data array at all - the whole
 		// section is that one block, which for most of a column is air.
 		char[] blocks = unpack(longsOf(blockStates, "data"), SECTION_BLOCKS, palette.length, 4);
 
 		CompoundTag biomes = compoundOf(sectionTag, "biomes");
-		ListTag biomePaletteTag = stringList(biomes, "palette");
+		ListTag biomePaletteTag = listOf(biomes, "palette");
 		String[] biomePalette = new String[biomePaletteTag.size()];
 		for (int i = 0; i < biomePalette.length; i++) {
-			biomePalette[i] = stringAt(biomePaletteTag, i);
+			biomePalette[i] = paletteName(biomePaletteTag, i);
 		}
 
 		return new Section(palette, blocks, biomePalette, longsOf(biomes, "data"));
+	}
+
+	/**
+	 * Pulls the registry name out of one palette entry, in any of the four
+	 * shapes the game has written them in.
+	 *
+	 * 1.20.1 and 26.1 always write a compound keyed {@code Name}. 26.3 changed
+	 * BlockState's codec to {@code Codec.either(byNameCodec, FULL_CODEC)}, so a
+	 * state with no non-default properties now serializes as a bare string and
+	 * only the rest keep a compound - which is keyed {@code id}, not
+	 * {@code Name}. NBT lists are homogeneous, so the moment one entry in a
+	 * section needs a compound, the bare strings beside it get wrapped as
+	 * {@code {"": "minecraft:stone"}} with the value under the empty key.
+	 *
+	 * Biome palettes are plain strings everywhere, but they go through here too
+	 * rather than get their own reader - there's no reason to assume they'll
+	 * stay exempt from the same change.
+	 *
+	 * The instanceof is doing real work: 1.20.1's {@code ListTag#getString(int)}
+	 * returns {@code tag.toString()} for a non-string element, not {@code ""},
+	 * so a "try string, fall back to compound" reader would take the SNBT text
+	 * of the whole compound as the block name and never reach the fallback.
+	 */
+	private static String paletteName(ListTag palette, int index) {
+		if (palette.get(index) instanceof StringTag) return stringAt(palette, index);
+		CompoundTag entry = compoundAt(palette, index);
+		String name = stringOf(entry, "Name");
+		if (name.isEmpty()) name = stringOf(entry, "id");
+		if (name.isEmpty()) name = stringOf(entry, "");
+		return name;
 	}
 
 	private static Block blockFor(String name) {
@@ -337,9 +372,7 @@ public final class SavedChunkReader {
 	// and 26.3 are identical here, so this splits two ways, not three.
 
 	//? if >=26 {
-	/*private static ListTag compoundList(CompoundTag tag, String key) { return tag.getListOrEmpty(key); }
-
-	private static ListTag stringList(CompoundTag tag, String key) { return tag.getListOrEmpty(key); }
+	/*private static ListTag listOf(CompoundTag tag, String key) { return tag.getListOrEmpty(key); }
 
 	private static CompoundTag compoundOf(CompoundTag tag, String key) { return tag.getCompoundOrEmpty(key); }
 
@@ -355,9 +388,12 @@ public final class SavedChunkReader {
 
 	private static int byteOf(CompoundTag tag, String key) { return tag.getByteOr(key, (byte) 0); }
 	*///?} else {
-	private static ListTag compoundList(CompoundTag tag, String key) { return tag.getList(key, Tag.TAG_COMPOUND); }
-
-	private static ListTag stringList(CompoundTag tag, String key) { return tag.getList(key, Tag.TAG_STRING); }
+	// Untyped on purpose: a 26.3 block palette is a list of strings when every
+	// state in the section is a default one and a list of compounds otherwise,
+	// so asking getList for a specific element type silently drops half of them.
+	private static ListTag listOf(CompoundTag tag, String key) {
+		return tag.get(key) instanceof ListTag list ? list : new ListTag();
+	}
 
 	private static CompoundTag compoundOf(CompoundTag tag, String key) { return tag.getCompound(key); }
 

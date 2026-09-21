@@ -70,3 +70,8 @@
 - A bare left-drag pans again, the way dragging a map does everywhere else;
   box-select moved onto shift-drag. Click-to-toggle and ctrl-drag-to-deselect
   are unchanged
+- Fixed every chunk read off disk on 26.3 drawing as a black square with no
+  biome and no ore tally. 26.3 changed how block palette entries are written -
+  default states are bare strings now, and the rest are keyed `id` instead of
+  `Name` - so the reader resolved every one of them to air. It handles all four
+  shapes now, verified by decoding real 1.20.1 and 26.3 saves

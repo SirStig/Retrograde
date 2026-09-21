@@ -59,10 +59,15 @@ isn't tracked anywhere right now.
 - SavedChunkReader decodes the on-disk chunk NBT by hand rather than
   calling a vanilla deserializer, because the only shared entry point
   across all six targets needs a PoiManager and has side effects. It reads
-  the packed block and biome palettes directly, which have been stable
-  since 1.18 (DataVersion 2825, which it checks) - but a future format
-  change is a thing to watch, and it would surface as a blank map for
-  unloaded chunks rather than as a crash.
+  the packed block and biome palettes directly. The container and the
+  packed-long encoding have held since 1.18 (DataVersion 2825, which it
+  checks), but the palette entries have not: 26.3 made default block states
+  serialize as bare strings and moved the rest from "Name" to "id", which
+  this reader assumed away and which showed up as solid black chunks with no
+  biome or ore data. It now handles all four shapes. The lesson is that a
+  format change here surfaces as a silently wrong map rather than a crash,
+  so palette shape is worth re-checking against a real save on each new MC
+  version rather than assumed.
 - The chunk filter can only search chunks the map has already read, since
   nothing else has been looked inside. Searching a whole save would mean
   walking every region file on disk, which wants a background index rather
