@@ -43,12 +43,14 @@ keybinding to open it, regen + undo, per-chunk ore info, and the Mekanism
 retrogen integration all work everywhere, including 26.3.
 
 The map is full-screen now: drag to pan, scroll to zoom toward the cursor,
-recenter/zoom/close buttons in a right-side panel. Renders real terrain
-(same color-per-block approach vanilla's held map item uses) with a
-translucent tint over touched chunks and your own position, chunk grid
-lines, and only shows chunks the server has actually loaded - it doesn't
-read unloaded chunks off disk yet, so walking closer fills the map in as
-you go.
+with a small floating title pill top-center and a compact recenter/zoom/close
+icon cluster top-right - both styled like a normal minimap mod's chrome
+(bordered chips over the map) instead of the flat full-height side panel
+earlier versions had. Renders real terrain (same color-per-block approach
+vanilla's held map item uses) with a translucent tint over touched chunks
+and your own position, chunk grid lines, and only shows chunks the server
+has actually loaded - it doesn't read unloaded chunks off disk yet, so
+walking closer fills the map in as you go.
 
 Map controls: click a chunk to regen it (touched chunks get a stronger
 warning), shift-click to undo, ctrl-click to hand it to another mod's
@@ -65,11 +67,16 @@ chunk data, see ROADMAP.md).
 This has been run in an actual game for real testing, not just compiled -
 that's how the original "everything shows as unloaded" bug got found and
 fixed (the map screen was reading chunk data straight off the render
-thread; only the server's own thread can actually do that), and how the
-zoom buttons got confirmed working. Drag-to-pan and scroll-to-zoom
-specifically are still unverified though - the environment I can test in
-doesn't have working mouse input, only keyboard, so those two only have
-compiling and a careful read of the code behind them.
+thread; only the server's own thread can actually do that), how the zoom
+buttons got confirmed working, and how the panel redesign above was
+confirmed to actually render (title chip, icon cluster, chunk grid, and ore
+tooltip all screenshotted live in a real 1.20.1 world). The 26.x
+`GuiGraphicsExtractor` render path only has a clean compile behind it, same
+as before - no Wayland-friendly way to actually launch 26.1/26.3 and look at
+it yet. Drag-to-pan and scroll-to-zoom specifically are still unverified
+though - the environment I can test in doesn't have working mouse input,
+only keyboard, so those two only have compiling and a careful read of the
+code behind them.
 
 ## Credit
 

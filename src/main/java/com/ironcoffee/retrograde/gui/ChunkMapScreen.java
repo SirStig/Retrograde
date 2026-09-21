@@ -6,6 +6,7 @@ import com.ironcoffee.retrograde.regen.ChunkRegenService;
 import com.ironcoffee.retrograde.retrogen.RetrogenIntegration;
 import com.ironcoffee.retrograde.retrogen.RetrogenService;
 import net.minecraft.client.gui.components.Button;
+import net.minecraft.client.gui.components.Tooltip;
 import net.minecraft.client.gui.screens.ConfirmScreen;
 //? if <26 {
 import net.minecraft.client.gui.GuiGraphics;
@@ -64,16 +65,20 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 public class ChunkMapScreen extends Screen {
 	private static final int CHUNK_BLOCKS = 16;
-	private static final int HEADER_HEIGHT = 24;
-	private static final int PANEL_WIDTH = 64;
-	private static final int PANEL_MARGIN = 6;
+	private static final int CHIP_MARGIN = 8;
+	private static final int ICON_SIZE = 20;
+	private static final int ICON_GAP = 4;
+	private static final int TITLE_PAD_H = 8;
+	private static final int TITLE_PAD_V = 4;
 	private static final int MIN_ZOOM = -2;
 	private static final int MAX_ZOOM = 4;
 	private static final int DRAG_THRESHOLD = 5;
 	private static final int MAX_TOOLTIP_ORES = 6;
 
-	private static final int COLOR_HEADER_BG = 0xE0202020;
-	private static final int COLOR_PANEL_BG = 0xC0202020;
+	private static final int COLOR_MAP_BG = 0xFF101010;
+	private static final int COLOR_CHIP_BG = 0xE0161616;
+	private static final int COLOR_CHIP_BORDER_LIGHT = 0x40FFFFFF;
+	private static final int COLOR_CHIP_BORDER_DARK = 0x80000000;
 	private static final int COLOR_PENDING = 0xFF404040;
 	private static final int COLOR_UNLOADED = 0xFF303030;
 	private static final int COLOR_TOUCHED_TINT = 0x503D8B3D;
@@ -90,6 +95,9 @@ public class ChunkMapScreen extends Screen {
 	private boolean draggingCamera;
 	private double dragTotalDistance;
 
+	private int clusterX, clusterY, clusterW, clusterH;
+	private int titleX, titleY, titleW, titleH;
+
 	public ChunkMapScreen() {
 		super(Component.translatable("gui.retrograde.chunk_map.title"));
 	}
@@ -99,19 +107,32 @@ public class ChunkMapScreen extends Screen {
 		super.init();
 		recenterOnPlayer();
 
-		int panelX = width - PANEL_WIDTH - PANEL_MARGIN;
-		int y = HEADER_HEIGHT + PANEL_MARGIN;
-		addRenderableWidget(Button.builder(Component.translatable("gui.retrograde.chunk_map.recenter"), b -> recenterOnPlayer())
-			.bounds(panelX, y, PANEL_WIDTH, 20).build());
-		y += 24;
+		clusterW = ICON_SIZE * 4 + ICON_GAP * 3;
+		clusterH = ICON_SIZE;
+		clusterX = width - CHIP_MARGIN - clusterW;
+		clusterY = CHIP_MARGIN;
+
+		int x = clusterX;
 		addRenderableWidget(Button.builder(Component.literal("+"), b -> adjustZoom(1))
-			.bounds(panelX, y, PANEL_WIDTH, 20).build());
-		y += 24;
+			.tooltip(Tooltip.create(Component.translatable("gui.retrograde.chunk_map.zoom_in")))
+			.bounds(x, clusterY, ICON_SIZE, ICON_SIZE).build());
+		x += ICON_SIZE + ICON_GAP;
 		addRenderableWidget(Button.builder(Component.literal("-"), b -> adjustZoom(-1))
-			.bounds(panelX, y, PANEL_WIDTH, 20).build());
-		y += 24;
-		addRenderableWidget(Button.builder(Component.translatable("gui.retrograde.chunk_map.close"), b -> onClose())
-			.bounds(panelX, y, PANEL_WIDTH, 20).build());
+			.tooltip(Tooltip.create(Component.translatable("gui.retrograde.chunk_map.zoom_out")))
+			.bounds(x, clusterY, ICON_SIZE, ICON_SIZE).build());
+		x += ICON_SIZE + ICON_GAP;
+		addRenderableWidget(Button.builder(Component.literal("R"), b -> recenterOnPlayer())
+			.tooltip(Tooltip.create(Component.translatable("gui.retrograde.chunk_map.recenter")))
+			.bounds(x, clusterY, ICON_SIZE, ICON_SIZE).build());
+		x += ICON_SIZE + ICON_GAP;
+		addRenderableWidget(Button.builder(Component.literal("X"), b -> onClose())
+			.tooltip(Tooltip.create(Component.translatable("gui.retrograde.chunk_map.close")))
+			.bounds(x, clusterY, ICON_SIZE, ICON_SIZE).build());
+
+		titleW = font.width(title) + TITLE_PAD_H * 2;
+		titleH = font.lineHeight + TITLE_PAD_V * 2;
+		titleX = (width - titleW) / 2;
+		titleY = CHIP_MARGIN;
 	}
 
 	@Override
@@ -146,11 +167,11 @@ public class ChunkMapScreen extends Screen {
 	}
 
 	private double mapCenterX() {
-		return (width - PANEL_WIDTH - PANEL_MARGIN * 2) / 2.0;
+		return width / 2.0;
 	}
 
 	private double mapCenterY() {
-		return HEADER_HEIGHT + (height - HEADER_HEIGHT) / 2.0;
+		return height / 2.0;
 	}
 
 	private double screenToBlockX(double screenX) {
@@ -169,8 +190,14 @@ public class ChunkMapScreen extends Screen {
 		return mapCenterY() + (blockZ - cameraBlockZ) * pixelsPerBlock();
 	}
 
+	private boolean isOverChip(double mouseX, double mouseY, int x, int y, int w, int h) {
+		return mouseX >= x && mouseX < x + w && mouseY >= y && mouseY < y + h;
+	}
+
 	private boolean isOverMap(double mouseX, double mouseY) {
-		return mouseX < width - PANEL_WIDTH - PANEL_MARGIN * 2 && mouseY > HEADER_HEIGHT;
+		if (isOverChip(mouseX, mouseY, titleX, titleY, titleW, titleH)) return false;
+		if (isOverChip(mouseX, mouseY, clusterX, clusterY, clusterW, clusterH)) return false;
+		return true;
 	}
 
 	private ChunkPos chunkAt(double screenX, double screenY) {
@@ -182,15 +209,15 @@ public class ChunkMapScreen extends Screen {
 	private record VisibleChunk(ChunkPos pos, int screenX, int screenY, int size) {}
 
 	private List<VisibleChunk> computeVisibleChunks() {
-		int mapWidth = width - PANEL_WIDTH - PANEL_MARGIN * 2;
-		int mapHeight = height - HEADER_HEIGHT;
+		int mapWidth = width;
+		int mapHeight = height;
 		double ppb = pixelsPerBlock();
 		int chunkPixelSize = Math.max(1, (int) Math.round(CHUNK_BLOCKS * ppb));
 
 		int minChunkX = Math.floorDiv((int) Math.floor(screenToBlockX(0)), CHUNK_BLOCKS) - 1;
 		int maxChunkX = Math.floorDiv((int) Math.ceil(screenToBlockX(mapWidth)), CHUNK_BLOCKS) + 1;
-		int minChunkZ = Math.floorDiv((int) Math.floor(screenToBlockZ(HEADER_HEIGHT)), CHUNK_BLOCKS) - 1;
-		int maxChunkZ = Math.floorDiv((int) Math.ceil(screenToBlockZ(HEADER_HEIGHT + mapHeight)), CHUNK_BLOCKS) + 1;
+		int minChunkZ = Math.floorDiv((int) Math.floor(screenToBlockZ(0)), CHUNK_BLOCKS) - 1;
+		int maxChunkZ = Math.floorDiv((int) Math.ceil(screenToBlockZ(mapHeight)), CHUNK_BLOCKS) + 1;
 
 		List<VisibleChunk> result = new ArrayList<>();
 		for (int cz = minChunkZ; cz <= maxChunkZ; cz++) {
@@ -221,7 +248,7 @@ public class ChunkMapScreen extends Screen {
 		if (serverLevel == null) return;
 		ChunkTracker tracker = ChunkTracker.forServer(server);
 
-		guiGraphics.fill(0, HEADER_HEIGHT, width, height, 0xFF101010);
+		guiGraphics.fill(0, 0, width, height, COLOR_MAP_BG);
 		for (VisibleChunk chunk : computeVisibleChunks()) {
 			textureCache.request(minecraft, server, serverLevel, chunk.pos());
 			ChunkTerrainTextureCache.Status status = textureCache.statusOf(chunk.pos());
@@ -246,15 +273,23 @@ public class ChunkMapScreen extends Screen {
 			}
 		}
 
-		guiGraphics.fill(0, 0, width, HEADER_HEIGHT, COLOR_HEADER_BG);
-		guiGraphics.drawCenteredString(font, title, width / 2, (HEADER_HEIGHT - 8) / 2, 0xFFFFFF);
-		guiGraphics.fill(width - PANEL_WIDTH - PANEL_MARGIN * 2, HEADER_HEIGHT, width, height, COLOR_PANEL_BG);
+		drawChip(guiGraphics, titleX, titleY, titleW, titleH);
+		guiGraphics.drawCenteredString(font, title, titleX + titleW / 2, titleY + TITLE_PAD_V, 0xFFFFFF);
+		drawChip(guiGraphics, clusterX - 1, clusterY - 1, clusterW + 2, clusterH + 2);
 
 		if (isOverMap(mouseX, mouseY)) {
 			ChunkPos hovered = chunkAt(mouseX, mouseY);
 			List<Component> tooltip = buildTooltip(server, player, dimension, tracker, hovered);
 			guiGraphics.renderComponentTooltip(font, tooltip, mouseX, mouseY);
 		}
+	}
+
+	private void drawChip(GuiGraphics g, int x, int y, int w, int h) {
+		g.fill(x, y, x + w, y + h, COLOR_CHIP_BG);
+		g.fill(x, y, x + w, y + 1, COLOR_CHIP_BORDER_LIGHT);
+		g.fill(x, y, x + 1, y + h, COLOR_CHIP_BORDER_LIGHT);
+		g.fill(x, y + h - 1, x + w, y + h, COLOR_CHIP_BORDER_DARK);
+		g.fill(x + w - 1, y, x + w, y + h, COLOR_CHIP_BORDER_DARK);
 	}
 	//?} else {
 	/*@Override
@@ -273,7 +308,7 @@ public class ChunkMapScreen extends Screen {
 		if (serverLevel == null) return;
 		ChunkTracker tracker = ChunkTracker.forServer(server);
 
-		guiGraphics.fill(0, HEADER_HEIGHT, width, height, 0xFF101010);
+		guiGraphics.fill(0, 0, width, height, COLOR_MAP_BG);
 		for (VisibleChunk chunk : computeVisibleChunks()) {
 			textureCache.request(minecraft, server, serverLevel, chunk.pos());
 			ChunkTerrainTextureCache.Status status = textureCache.statusOf(chunk.pos());
@@ -298,15 +333,23 @@ public class ChunkMapScreen extends Screen {
 			}
 		}
 
-		guiGraphics.fill(0, 0, width, HEADER_HEIGHT, COLOR_HEADER_BG);
-		guiGraphics.centeredText(font, title, width / 2, (HEADER_HEIGHT - 8) / 2, 0xFFFFFF);
-		guiGraphics.fill(width - PANEL_WIDTH - PANEL_MARGIN * 2, HEADER_HEIGHT, width, height, COLOR_PANEL_BG);
+		drawChip(guiGraphics, titleX, titleY, titleW, titleH);
+		guiGraphics.centeredText(font, title, titleX + titleW / 2, titleY + TITLE_PAD_V, 0xFFFFFF);
+		drawChip(guiGraphics, clusterX - 1, clusterY - 1, clusterW + 2, clusterH + 2);
 
 		if (isOverMap(mouseX, mouseY)) {
 			ChunkPos hovered = chunkAt(mouseX, mouseY);
 			List<Component> tooltip = buildTooltip(server, player, dimension, tracker, hovered);
 			guiGraphics.setComponentTooltipForNextFrame(font, tooltip, mouseX, mouseY);
 		}
+	}
+
+	private void drawChip(GuiGraphicsExtractor g, int x, int y, int w, int h) {
+		g.fill(x, y, x + w, y + h, COLOR_CHIP_BG);
+		g.fill(x, y, x + w, y + 1, COLOR_CHIP_BORDER_LIGHT);
+		g.fill(x, y, x + 1, y + h, COLOR_CHIP_BORDER_LIGHT);
+		g.fill(x, y + h - 1, x + w, y + h, COLOR_CHIP_BORDER_DARK);
+		g.fill(x + w - 1, y, x + w, y + h, COLOR_CHIP_BORDER_DARK);
 	}
 	*///?}
 

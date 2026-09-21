@@ -5,6 +5,8 @@
   "gui.retrograde.chunk_map.singleplayer_only": "Chunk map is singleplayer-only for now",
   "gui.retrograde.chunk_map.recenter": "Center",
   "gui.retrograde.chunk_map.close": "Close",
+  "gui.retrograde.chunk_map.zoom_in": "Zoom In",
+  "gui.retrograde.chunk_map.zoom_out": "Zoom Out",
   "key.category.retrograde.main": "Retrograde",
   "gui.retrograde.confirm_regen": "Regenerate chunk (%s, %s)?",
   "gui.retrograde.confirm_regen_touched": "WARNING: Regenerate TOUCHED chunk (%s, %s)?",
