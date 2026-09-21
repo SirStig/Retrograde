@@ -313,7 +313,6 @@ abstract class ModPlatformPlugin @Inject constructor() : Plugin<Project> {
 				"issues_url" to issuesUrl,
 				"homepage_url" to prop("mod.homepage_url"),
 				"sources_url" to prop("mod.sources_url"),
-				"discord_url" to prop("mod.discord_url"),
 				"dependencies" to dependencies
 			)
 

@@ -6,7 +6,6 @@
 ![Minecraft](https://img.shields.io/badge/minecraft-1.20.1%20%7C%2026.1%20%7C%2026.3-4c1)
 ![Loaders](https://img.shields.io/badge/loaders-Fabric%20%7C%20Forge%20%7C%20NeoForge-informational)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Discord](https://img.shields.io/badge/discord-join-5865F2?logo=discord&logoColor=white)](https://discord.gg/QWJxfb4zQZ)
 
 A full-screen chunk map for singleplayer worlds. See where you've been, what
 biomes and ore are down there, then select chunks and regenerate them — with
@@ -116,7 +115,6 @@ task-ordering check.
 
 ## Links
 
-- [Discord](https://discord.gg/QWJxfb4zQZ)
 - [Issues](https://github.com/SirStig/Retrograde/issues)
 - [Changelog](CHANGELOG.md)
 - [Roadmap](ROADMAP.md)
