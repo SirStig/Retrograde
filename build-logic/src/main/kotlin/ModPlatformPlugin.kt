@@ -561,8 +561,11 @@ abstract class ModPlatformPlugin @Inject constructor() : Plugin<Project> {
 		this.accessToken = accessToken
 		minecraftVersions.addAll(listOf(currentVersion) + additionalVersions)
 
-		// Environment
-		environment = ModrinthEnvironment.SERVER_ONLY_CLIENT_OPTIONAL
+		// Retrograde is a map screen driven by the integrated server: the GUI
+		// is client-side, and everything it draws comes from the singleplayer
+		// server in the same process. On a dedicated server it has nothing to
+		// do, and the map says so rather than opening.
+		environment = ModrinthEnvironment.SINGLEPLAYER_ONLY
 
 		if (!staging) {
 			deps.required.forEach { dep -> whenNotNull(dep.modrinth) { requires(it) } }
@@ -583,9 +586,9 @@ abstract class ModPlatformPlugin @Inject constructor() : Plugin<Project> {
 		this.accessToken = accessToken
 		minecraftVersions.addAll(listOf(currentVersion) + additionalVersions)
 
-		// Environment
-		server = true
-		client = false
+		// Client-side: see the note on the Modrinth environment above.
+		client = true
+		server = false
 
 		deps.required.forEach { dep -> whenNotNull(dep.curseforge) { requires(it) } }
 		deps.optional.forEach { dep -> whenNotNull(dep.curseforge) { optional(it) } }
