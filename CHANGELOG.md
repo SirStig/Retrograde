@@ -159,3 +159,34 @@
   scrollbar and gearIcon primitives, plus scissor clipping, so every panel
   and overlay in the mod is drawn through the same reusable, code-drawn
   building blocks instead of ad hoc fill() calls per screen
+- Rewrote the settings gear again. The first "real gear" was a disc with eight
+  squares stamped round its circumference, which reads as a lump: square teeth
+  centred on a curve merge into the disc on the diagonals and stick out on the
+  axes. It's now rasterised in polar coordinates with 4x4 supersampled
+  coverage, so the edge antialiases, every tooth is the same shape, and the
+  silhouette holds at any radius. Six teeth rather than eight, because at the
+  ~14px a toolbar button gives you eight land under 2px apart
+- Terrain and Ores map modes use real item icons (grass block, diamond ore)
+  instead of letters. Terrain in particular was U+25A0, which renders as an
+  anonymous white square. Biome and Touched keep their letters - they're
+  abstractions with no block to point at
+- Fixed the map's own buttons drawing over the Chunk Manipulation and Settings
+  overlays. Vanilla renders every widget of a screen in one pass after the
+  screen's own drawing, so an overlay panel could never be on top of one: at a
+  large GUI scale, where the toolbar and action panel get pushed inward far
+  enough to collide with the centred overlay, they punched straight through
+  it and stayed clickable. Widgets the overlay covers are now taken out of the
+  render pass, which takes click-through with them. Per-widget rather than
+  all-or-nothing, so at a normal GUI scale nothing disappears and the gear
+  still toggles the settings panel shut
+- Added Ore editing, as vanilla-ore retrogen: a "Regen ores" row in Chunk
+  Manipulation that re-runs the world's own underground-ore features over the
+  selection through vanilla's placement code. Real veins, real depths, right
+  stone type, biome-checked - not ore blocks sprinkled into a generated chunk.
+  Seeded from the world seed and chunk position the way worldgen seeds its own
+  decoration pass, but not a bit-exact replay of it - vanilla's feature
+  ordering lives in a private field - so ore that already generated gets a
+  second, separate set of veins rather than the same ones again. Re-running is
+  deterministic, so it can't be stacked by pressing it repeatedly. Edits chunks
+  in place, so unlike regen there's no move-out wait, and no undo. Still off by
+  default behind the cheats switch

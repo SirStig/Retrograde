@@ -5,6 +5,7 @@ import com.ironcoffee.retrograde.chunk.ChunkTracker;
 import com.ironcoffee.retrograde.config.RetrogradeConfig;
 import com.ironcoffee.retrograde.regen.ChunkRegenJob;
 import com.ironcoffee.retrograde.regen.ChunkRegenService;
+import com.ironcoffee.retrograde.retrogen.OreRetrogenService;
 import com.ironcoffee.retrograde.retrogen.RetrogenIntegration;
 import com.ironcoffee.retrograde.retrogen.RetrogenService;
 import net.minecraft.client.gui.components.Button;
@@ -369,6 +370,15 @@ public class ChunkMapScreen extends Screen {
 	private final ManipulationOverlay manipulationOverlay = new ManipulationOverlay(this);
 	private final SettingsOverlay settingsOverlay = new SettingsOverlay(this);
 
+	/**
+	 * Every widget this screen registers for itself, mapped to whether the
+	 * screen wants it shown - before an overlay gets a say. See
+	 * {@link #syncOverlayOcclusion()}. Overlay-owned widgets, which come in
+	 * through {@link #addWidget}, are deliberately absent: they're what the
+	 * occlusion is being done *for*.
+	 */
+	private final Map<Button, Boolean> ownWidgets = new LinkedHashMap<>();
+
 	/** Scroll position of the info panel's ore list, in pixels; see {@link #drawOreSection}. */
 	private int oreScrollPx;
 	/** Which chunk {@link #oreScrollPx} belongs to, so hovering a new one resets it to the top. */
@@ -391,6 +401,10 @@ public class ChunkMapScreen extends Screen {
 	@Override
 	protected void init() {
 		super.init();
+		// Screen.init() cleared the widget list before calling this, so the
+		// occlusion bookkeeping has to be cleared with it or it fills up with
+		// dead buttons from before the resize.
+		ownWidgets.clear();
 		// Set on the way out to a sub-screen, cleared on the way back in, so
 		// a hand-off that never returns here can't leave it stuck on.
 		handingOff = false;
@@ -404,23 +418,23 @@ public class ChunkMapScreen extends Screen {
 		clusterY = CHIP_MARGIN;
 
 		int x = clusterX;
-		addRenderableWidget(Button.builder(Component.literal("+"), b -> adjustZoom(1))
+		own(addRenderableWidget(Button.builder(Component.literal("+"), b -> adjustZoom(1))
 			.tooltip(Tooltip.create(Component.translatable("gui.retrograde.chunk_map.zoom_in")))
-			.bounds(x, clusterY, ICON_SIZE, ICON_SIZE).build());
+			.bounds(x, clusterY, ICON_SIZE, ICON_SIZE).build()));
 		x += ICON_SIZE + ICON_GAP;
-		addRenderableWidget(Button.builder(Component.literal("-"), b -> adjustZoom(-1))
+		own(addRenderableWidget(Button.builder(Component.literal("-"), b -> adjustZoom(-1))
 			.tooltip(Tooltip.create(Component.translatable("gui.retrograde.chunk_map.zoom_out")))
-			.bounds(x, clusterY, ICON_SIZE, ICON_SIZE).build());
+			.bounds(x, clusterY, ICON_SIZE, ICON_SIZE).build()));
 		x += ICON_SIZE + ICON_GAP;
-		addRenderableWidget(Button.builder(Component.literal("R"), b -> recenterOnPlayer())
+		own(addRenderableWidget(Button.builder(Component.literal("R"), b -> recenterOnPlayer())
 			.tooltip(Tooltip.create(Component.translatable("gui.retrograde.chunk_map.recenter")))
-			.bounds(x, clusterY, ICON_SIZE, ICON_SIZE).build());
+			.bounds(x, clusterY, ICON_SIZE, ICON_SIZE).build()));
 		x += ICON_SIZE + ICON_GAP;
 		// Cycles rather than opening a picker: there are four modes, switching
 		// between them is something you do while comparing, and a menu between
 		// each comparison is a menu you stop using.
-		mapModeButton = addRenderableWidget(Button.builder(Component.empty(), b -> cycleMapMode())
-			.bounds(x, clusterY, ICON_SIZE, ICON_SIZE).build());
+		mapModeButton = own(addRenderableWidget(Button.builder(Component.empty(), b -> cycleMapMode())
+			.bounds(x, clusterY, ICON_SIZE, ICON_SIZE).build()));
 		// Sets the real label and tooltip; the builder's is a placeholder
 		// because what goes there depends on which mode is current.
 		syncMapModeButton();
@@ -428,13 +442,13 @@ public class ChunkMapScreen extends Screen {
 		// Empty label: the gear itself is drawn in drawIconOverlays(), a real
 		// shape built from Painter primitives rather than a font glyph that
 		// goes fuzzy or lopsided depending on what font pack is loaded.
-		settingsButton = addRenderableWidget(Button.builder(Component.empty(), b -> toggleSettings())
+		settingsButton = own(addRenderableWidget(Button.builder(Component.empty(), b -> toggleSettings())
 			.tooltip(Tooltip.create(Component.translatable("gui.retrograde.chunk_map.settings")))
-			.bounds(x, clusterY, ICON_SIZE, ICON_SIZE).build());
+			.bounds(x, clusterY, ICON_SIZE, ICON_SIZE).build()));
 		x += ICON_SIZE + ICON_GAP;
-		addRenderableWidget(Button.builder(Component.literal("X"), b -> onClose())
+		own(addRenderableWidget(Button.builder(Component.literal("X"), b -> onClose())
 			.tooltip(Tooltip.create(Component.translatable("gui.retrograde.chunk_map.close")))
-			.bounds(x, clusterY, ICON_SIZE, ICON_SIZE).build());
+			.bounds(x, clusterY, ICON_SIZE, ICON_SIZE).build()));
 
 		titleW = font.width(title) + TITLE_PAD_H * 2;
 		titleH = font.lineHeight + TITLE_PAD_V * 2;
@@ -613,19 +627,19 @@ public class ChunkMapScreen extends Screen {
 	}
 
 	private Button addFilterButton(int x, int y, int w, String tooltipKey, Button.OnPress onPress) {
-		Button button = addRenderableWidget(Button.builder(Component.empty(), onPress)
+		Button button = own(addRenderableWidget(Button.builder(Component.empty(), onPress)
 			.tooltip(Tooltip.create(Component.translatable(tooltipKey)))
 			.bounds(x, y, w, filterRowH)
-			.build());
-		button.visible = false;
+			.build()));
+		wantVisible(button, false);
 		return button;
 	}
 
 	private Button addActionButton(int x, int y, int w, String labelKey, String tooltipKey, Button.OnPress onPress) {
-		return addRenderableWidget(Button.builder(Component.translatable(labelKey, 0), onPress)
+		return own(addRenderableWidget(Button.builder(Component.translatable(labelKey, 0), onPress)
 			.tooltip(Tooltip.create(Component.translatable(tooltipKey)))
 			.bounds(x, y, w, ACTION_BUTTON_H)
-			.build());
+			.build()));
 	}
 
 	/**
@@ -687,9 +701,9 @@ public class ChunkMapScreen extends Screen {
 		// column it sits on top of this one, so the buttons underneath have to
 		// stop taking clicks meant for the panel covering them.
 		boolean buried = sidePanelOverlaps && filterOpen;
-		manipulateButton.visible = !buried;
-		clearButton.visible = !buried;
-		findButton.visible = !buried;
+		wantVisible(manipulateButton, !buried);
+		wantVisible(clearButton, !buried);
+		wantVisible(findButton, !buried);
 	}
 
 	private void recenterOnPlayer() {
@@ -834,14 +848,17 @@ public class ChunkMapScreen extends Screen {
 	 * it doesn't need to duck under one.
 	 */
 	private void drawIconOverlays(Painter painter) {
-		if (mapModeButton != null && mapMode.item != null) {
+		// These stand in for the buttons' labels, so they follow the buttons
+		// into hiding when an overlay covers them - otherwise a gear would go
+		// on floating over the settings panel that replaced it.
+		if (mapModeButton != null && mapModeButton.visible && mapMode.item != null) {
 			// Items always render 16x16 regardless of the button, so centre
 			// rather than assuming the two sizes agree.
 			painter.item(mapMode.item,
 				mapModeButton.getX() + (mapModeButton.getWidth() - ITEM_ICON_SIZE) / 2,
 				mapModeButton.getY() + (mapModeButton.getHeight() - ITEM_ICON_SIZE) / 2);
 		}
-		if (settingsButton == null) return;
+		if (settingsButton == null || !settingsButton.visible) return;
 		int cx = settingsButton.getX() + settingsButton.getWidth() / 2;
 		int cy = settingsButton.getY() + settingsButton.getHeight() / 2;
 		int radius = Math.max(4, Math.min(settingsButton.getWidth(), settingsButton.getHeight()) / 2 - 3);
@@ -849,6 +866,9 @@ public class ChunkMapScreen extends Screen {
 	}
 
 	private void draw(Painter painter, int mouseX, int mouseY) {
+		// Ahead of everything, including super.render()'s widget pass, since
+		// that pass is what this is deciding the contents of.
+		syncOverlayOcclusion();
 		painter.fill(0, 0, width, height, COLOR_MAP_BG);
 
 		MinecraftServer server = minecraft == null ? null : minecraft.getSingleplayerServer();
@@ -1472,7 +1492,7 @@ public class ChunkMapScreen extends Screen {
 	private void syncFilterButtons() {
 		for (Button button : List.of(filterScopeButton, filterTouchedButton, filterSlimeButton, filterBiomeButton,
 				filterOreButton, filterOreRuleButton, filterSelectButton, filterRestoreButton, filterCloseButton)) {
-			button.visible = filterOpen;
+			wantVisible(button, filterOpen);
 		}
 		if (!filterOpen) return;
 
@@ -1735,6 +1755,70 @@ public class ChunkMapScreen extends Screen {
 	}
 
 	/**
+	 * Registers a widget this screen owns, so that an open overlay can get it
+	 * out of the way. Everything the map puts on itself goes through here;
+	 * the overlays' own buttons go through {@link #addWidget} instead.
+	 */
+	private Button own(Button button) {
+		ownWidgets.put(button, button.visible);
+		return button;
+	}
+
+	/**
+	 * Sets what this screen wants a widget's visibility to be, which is not
+	 * necessarily what it gets - see {@link #syncOverlayOcclusion()}. Every
+	 * assignment to {@code visible} on a screen-owned widget goes through
+	 * here, so that an overlay hiding something can't be quietly undone by
+	 * the next tick's sync putting it back.
+	 */
+	private void wantVisible(Button button, boolean wanted) {
+		ownWidgets.put(button, wanted);
+		button.visible = wanted && !occludedByOverlay(button);
+	}
+
+	/**
+	 * Gets the map's own chrome out from under whichever overlay is open.
+	 *
+	 * The overlays are meant to sit on top of everything, and their panels do
+	 * - they're Painter fills drawn at the end of {@link #draw}. Their
+	 * buttons can't be, because vanilla renders every widget of a screen in
+	 * one pass in registration order, after that draw: there is no z-index to
+	 * raise. A toolbar button registered in init() lands over an overlay
+	 * panel no matter where the panel is drawn from.
+	 *
+	 * Hiding what the overlay covers is the fix that needs no render-era
+	 * branch, and it takes click-through with it for free, since
+	 * AbstractWidget ignores the mouse while it isn't visible - a button
+	 * buried under the overlay shouldn't be pressable either.
+	 *
+	 * Per-widget rather than all-or-nothing on purpose. At a normal GUI scale
+	 * the centred overlay clears the edges entirely and the map keeps its
+	 * toolbar, so clicking the gear a second time still closes the settings
+	 * panel. It's only when a large GUI scale pushes the chrome inward far
+	 * enough to collide that anything disappears - which is exactly the case
+	 * this exists for.
+	 */
+	private void syncOverlayOcclusion() {
+		for (Map.Entry<Button, Boolean> entry : ownWidgets.entrySet()) {
+			Button button = entry.getKey();
+			button.visible = entry.getValue() && !occludedByOverlay(button);
+		}
+	}
+
+	private boolean occludedByOverlay(Button button) {
+		return manipulationOverlay.occludes(button.getX(), button.getY(), button.getWidth(), button.getHeight())
+			|| settingsOverlay.occludes(button.getX(), button.getY(), button.getWidth(), button.getHeight());
+	}
+
+	/** How far {@link Painter#dropShadow} reaches past an overlay panel's own bounds. */
+	static final int OVERLAY_SHADOW_SPREAD = 5;
+
+	/** Whether two screen-space rectangles overlap at all. */
+	static boolean rectsOverlap(int ax, int ay, int aw, int ah, int bx, int by, int bw, int bh) {
+		return ax < bx + bw && bx < ax + aw && ay < by + bh && by < ay + ah;
+	}
+
+	/**
 	 * Package-private passthrough so an overlay can tear down its own
 	 * widgets before rebuilding them - SettingsOverlay does this every time
 	 * a toggle changes how many rows it has. Without it, every click would
@@ -1976,6 +2060,38 @@ public class ChunkMapScreen extends Screen {
 	/** Called by RetrogenScreen once a mod has been picked and confirmed. */
 	public void startRetrogenJob(List<ChunkPos> targets, RetrogenIntegration integration) {
 		startJob(ChunkRegenJob.Mode.RETROGEN, targets, integration);
+	}
+
+	/**
+	 * Ore retrogen: re-runs the world's own underground-ore features over the
+	 * selection. See OreRetrogenService for why this is a feature rerun rather
+	 * than the "type a number, get ore" the settings toggle's name suggests.
+	 *
+	 * A plain confirm rather than a preview screen, unlike regen. The preview
+	 * exists because regen destroys work and the numbers that decide whether
+	 * you want it are knowable first; this one adds blocks into stone and
+	 * takes nothing away, so there's nothing to weigh up that the confirm
+	 * text can't say in a sentence.
+	 */
+	void beginOreRetrogen() {
+		if (selection.isEmpty()) return;
+		if (!RetrogradeConfig.allowOreEdit()) return;
+		List<ChunkPos> targets = List.copyOf(selection);
+		MinecraftServer server = minecraft == null ? null : minecraft.getSingleplayerServer();
+		var player = minecraft == null ? null : minecraft.player;
+		ServerLevel serverLevel = server == null || player == null ? null : server.getLevel(player.level().dimension());
+		// Asked up front rather than assumed: a world can perfectly well have
+		// no underground-ore features at all, and finding that out after
+		// watching a progress bar would be a worse way to learn it. The check
+		// reads generator settings, not chunks, so it's safe from here.
+		if (serverLevel != null && !OreRetrogenService.hasOreFeatures(serverLevel)) {
+			showNotice(Component.translatable("gui.retrograde.ore_retrogen.none_available").getString());
+			return;
+		}
+		confirmThen(
+			Component.translatable("gui.retrograde.confirm_ore_retrogen", targets.size()),
+			Component.translatable("gui.retrograde.confirm_ore_retrogen.detail"),
+			() -> startJob(ChunkRegenJob.Mode.ORE_RETROGEN, targets, null));
 	}
 
 	private void confirmThen(Component question, Component detail, Runnable action) {

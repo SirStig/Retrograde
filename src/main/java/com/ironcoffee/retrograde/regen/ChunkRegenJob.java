@@ -2,6 +2,7 @@ package com.ironcoffee.retrograde.regen;
 
 import com.ironcoffee.retrograde.Main;
 import com.ironcoffee.retrograde.chunk.ChunkTracker;
+import com.ironcoffee.retrograde.retrogen.OreRetrogenService;
 import com.ironcoffee.retrograde.retrogen.RetrogenIntegration;
 import com.ironcoffee.retrograde.retrogen.RetrogenService;
 import net.minecraft.network.chat.Component;
@@ -70,7 +71,18 @@ public final class ChunkRegenJob {
 	public enum Mode {
 		REGENERATE,
 		UNDO,
-		RETROGEN
+		RETROGEN,
+		ORE_RETROGEN
+	}
+
+	/**
+	 * Whether this mode edits chunks in place through the live level rather
+	 * than rewriting them on disk. The in-place modes need the chunk loaded,
+	 * which is the exact opposite of what regen and undo need, so they skip
+	 * the move-the-player-out-and-wait-for-unload staging entirely.
+	 */
+	private static boolean isInPlace(Mode mode) {
+		return mode == Mode.RETROGEN || mode == Mode.ORE_RETROGEN;
 	}
 
 	public enum Phase {
@@ -152,7 +164,7 @@ public final class ChunkRegenJob {
 		this.integration = integration;
 		this.unloadTimeoutTicks = Math.max(1, unloadTimeoutSeconds) * 20;
 		this.watchdogTicks = Math.max(1, watchdogTimeoutSeconds) * 20;
-		this.phase = mode == Mode.RETROGEN ? Phase.WORKING : Phase.MOVING_PLAYER;
+		this.phase = isInPlace(mode) ? Phase.WORKING : Phase.MOVING_PLAYER;
 	}
 
 	/**
@@ -185,9 +197,9 @@ public final class ChunkRegenJob {
 	 */
 	public static int estimateSeconds(Mode mode, int chunkCount) {
 		int working = (int) Math.ceil(chunkCount / (double) (CHUNKS_PER_STEP * STEPS_PER_SECOND));
-		// Retrogen hands each chunk to another mod in place, so it skips the
-		// whole move-out-and-wait-for-unload dance that regen and undo need.
-		int staging = mode == Mode.RETROGEN ? 0 : STAGING_SECONDS;
+		// The retrogen modes edit each chunk in place, so they skip the whole
+		// move-out-and-wait-for-unload dance that regen and undo need.
+		int staging = isInPlace(mode) ? 0 : STAGING_SECONDS;
 		return Math.max(1, working + staging);
 	}
 
@@ -604,6 +616,15 @@ public final class ChunkRegenJob {
 				RetrogenService.run(server, player, integration, pos);
 				succeeded++;
 			}
+			case ORE_RETROGEN -> {
+				switch (OreRetrogenService.run(level, pos)) {
+					case OK -> succeeded++;
+					// A world whose biomes declare no underground-ore step
+					// isn't a failure, it's a world with nothing to re-run.
+					case NO_FEATURES -> skipped++;
+					case FAILED -> failed++;
+				}
+			}
 		}
 	}
 
@@ -772,6 +793,7 @@ public final class ChunkRegenJob {
 			case UNDO -> Component.translatable("gui.retrograde.job.title.undo", targets.size());
 			case RETROGEN -> Component.translatable("gui.retrograde.job.title.retrogen",
 				integration == null ? "?" : integration.displayName(), targets.size());
+			case ORE_RETROGEN -> Component.translatable("gui.retrograde.job.title.ore_retrogen", targets.size());
 		};
 	}
 

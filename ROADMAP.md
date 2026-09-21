@@ -43,31 +43,58 @@ RetrogenIntegration) already works by re-running just that mod's
 registered ore features against the existing chunk, not full regen. The
 retrogen wrapper already covers this for whatever mods have their own
 retrogen command. A vanilla-ore equivalent (re-run just the vanilla ore
-configured features) would follow the same shape without needing the
-block-tracking or shadow-level machinery at all - a good first step before
-attempting the general "regen only X" version above, since it's a much
-smaller piece of the eventual full design that's independently useful on
-its own. "Only structures" or "only new biomes" would need the harder,
+configured features) follows the same shape without needing the
+block-tracking or shadow-level machinery at all, and is now built - see
+"Ore editing" below. It was a good first step before attempting the general
+"regen only X" version above, being a much smaller piece of the eventual
+full design that's independently useful on its own. "Only structures" or "only new biomes" would need the harder,
 full block-diff version, since those aren't feature-reruns in the same
 way, and "only new biomes" would additionally need snapshotting what
 generator settings were active when a chunk was first generated, which
 isn't tracked anywhere right now.
 
-## Ore editing
+## Ore editing - done
 
-The settings screen has a toggle for it; the Chunk Manipulation menu has no
-row for it yet, on purpose. The obvious implementation - scatter ore blocks
-into an already-generated chunk - produces something that doesn't look like
-worldgen (wrong vein shapes, wrong depth distribution, no respect for the
-biome or the surrounding stone type) and can't be undone precisely, since
-regen's undo snapshot is per-chunk and would roll back everything else too.
+Built as the vanilla-ore retrogen argued for below, not as ore editing.
+See OreRetrogenService; the Chunk Manipulation menu grows a "Regen ores"
+row when the setting is on.
 
-The honest version is the vanilla-ore retrogen described above: re-run just
-the vanilla ore configured features against the existing chunk, the same way
-the Mekanism integration re-runs Mekanism's. That gives real veins in real
-places, and "more ore" becomes "run it again" rather than a number to type
-in. "Less ore" has no equivalent and probably shouldn't - removing ore from
-a chunk you may have already mined is a diff problem, not a generation one.
+The obvious implementation - scatter ore blocks into an already-generated
+chunk - produces something that doesn't look like worldgen (wrong vein
+shapes, wrong depth distribution, no respect for the biome or the
+surrounding stone type) and can't be undone precisely, since regen's undo
+snapshot is per-chunk and would roll back everything else too. So it
+doesn't place ore at all: it asks the biome for the placed features it
+would have run in the UNDERGROUND_ORES decoration step and runs exactly
+those through vanilla's own placement code, the same way the Mekanism
+integration re-runs Mekanism's. Real veins in real places, for free.
+
+### The one thing that isn't a bit-exact replay
+
+The per-feature seed takes an index alongside the decoration seed, and
+vanilla's index is the feature's position in the generator's globally
+sorted feature list (FeatureSorter). ChunkGenerator keeps that list in a
+private field with no accessor, so reproducing it would need an accessor
+mixin per target, against a type (FeatureSorter.StepFeatureData) that is
+itself free to move between versions. The index used instead is the
+feature's position in the list OreRetrogenService gathers.
+
+That doesn't affect *whether* a feature runs, only where it lands, so the
+case this exists for - ore that wasn't registered when the chunk was
+written - works exactly as intended. What it does mean is that ore which
+already generated gets a second, independent set of veins rather than the
+same ones again: on a plain vanilla world this is a real "more ore", not a
+no-op. Re-running is still deterministic (same seed, same gathered list,
+same order), so it can't be stacked by pressing the button repeatedly,
+which is the safety property that actually matters.
+
+If bit-exact replay is ever wanted - so that an untouched chunk really is a
+no-op - that's the accessor mixin, and it should be decided as its own
+piece of work rather than smuggled in.
+
+"Less ore" is still not implemented and still probably shouldn't be -
+removing ore from a chunk you may have already mined is a diff problem, not
+a generation one.
 
 ## What the progress screen still can't survive
 

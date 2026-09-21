@@ -50,6 +50,7 @@ final class ManipulationOverlay {
 
 	private boolean open;
 	private int x, y, h;
+	private int lastScreenW, lastScreenH;
 	private int oreViewX, oreViewY, oreViewW, oreViewH;
 	private int oreScrollPx;
 
@@ -58,6 +59,7 @@ final class ManipulationOverlay {
 	private Button undoButton;
 	private Button retrogenButton;
 	private Button biomeButton;
+	private Button oreButton;
 
 	/** Snapshot taken when the overlay opens, so the numbers on it don't shift while it's up. */
 	private List<ChunkPos> targets = List.of();
@@ -84,7 +86,10 @@ final class ManipulationOverlay {
 		biomes = screen.aggregateBiomes(targets);
 		unscanned = screen.unscannedCount(targets);
 		oreScrollPx = 0;
-		syncWidgets();
+		// Re-laid out on every opening, not just on resize: the ore row only
+		// exists when ore editing is switched on, and that can be switched on
+		// in the settings overlay between one opening of this one and the next.
+		layout(lastScreenW, lastScreenH);
 	}
 
 	void close() {
@@ -104,13 +109,46 @@ final class ManipulationOverlay {
 		return open && screen.isOverChip(mouseX, mouseY, x, y, WIDTH, h);
 	}
 
+	/**
+	 * Whether this overlay covers the given rectangle, shadow included, so
+	 * the map can take its own widgets out of the render pass rather than let
+	 * them draw over the panel. See ChunkMapScreen#syncOverlayOcclusion.
+	 */
+	boolean occludes(int wx, int wy, int ww, int wh) {
+		if (!open) return false;
+		int spread = OVERLAY_SHADOW_SPREAD;
+		return rectsOverlap(x - spread, y - spread, WIDTH + spread * 2, h + spread * 2, wx, wy, ww, wh);
+	}
+
 	void scroll(double mouseX, double mouseY, double delta) {
 		if (!screen.isOverChip(mouseX, mouseY, oreViewX, oreViewY, oreViewW, oreViewH)) return;
 		oreScrollPx -= (int) Math.signum(delta) * ORE_ROW_H;
 	}
 
-	/** Recomputed on every map resize, same as the filter panel's row metrics. */
+	/** Recomputed on every map resize and every opening; see {@link #open()}. */
 	void layout(int screenWidth, int screenHeight) {
+		lastScreenW = screenWidth;
+		lastScreenH = screenHeight;
+
+		// Torn down and rebuilt rather than repositioned, for the same reason
+		// SettingsOverlay does it: the number of action rows isn't fixed, and
+		// leaving the old buttons merely hidden would pile up dead widgets on
+		// the map screen for as long as the map stays open.
+		// An array rather than List.of: these are all null on the first
+		// layout, and List.of rejects nulls outright.
+		for (Button b : new Button[] {regenButton, undoButton, retrogenButton, biomeButton, oreButton, closeButton}) {
+			if (b != null) screen.removeWidget(b);
+		}
+		oreButton = null;
+
+		// Ore retrogen gets a row of its own only when it's switched on. It's
+		// full width rather than sharing a row, since there's no second
+		// operation to pair it with and a half-width button with an empty gap
+		// beside it reads as something missing.
+		boolean oreAllowed = RetrogradeConfig.allowOreEdit();
+		int actionRows = oreAllowed ? 3 : 2;
+		int actionsH = BUTTON_H * actionRows + BUTTON_GAP * (actionRows - 1);
+
 		x = (screenWidth - WIDTH) / 2;
 
 		int contentH = PAD // top
@@ -121,13 +159,14 @@ final class ManipulationOverlay {
 			+ 6 // divider
 			+ LINE_H + BIOME_ROWS * LINE_H + 4 // biome heading + rows
 			+ 6 // divider
-			+ BUTTON_H * 2 + BUTTON_GAP // two rows of actions
+			+ actionsH
 			+ PAD;
 		h = Math.min(contentH, screenHeight - 24);
 		y = Math.max(12, (screenHeight - h) / 2);
 
 		int buttonW = (WIDTH - PAD * 2 - BUTTON_GAP) / 2;
-		int buttonY = y + h - PAD - BUTTON_H * 2 - BUTTON_GAP;
+		int fullW = WIDTH - PAD * 2;
+		int buttonY = y + h - PAD - actionsH;
 
 		regenButton = screen.addWidget(Button.builder(Component.empty(), b -> act(screen::beginRegen))
 			.tooltip(Tooltip.create(Component.translatable("gui.retrograde.chunk_map.action.regen.tip")))
@@ -142,6 +181,12 @@ final class ManipulationOverlay {
 		biomeButton = screen.addWidget(Button.builder(Component.empty(), b -> act(screen::beginBiomeEdit))
 			.tooltip(Tooltip.create(Component.translatable("gui.retrograde.manipulate.set_biome.tip")))
 			.bounds(x + PAD + buttonW + BUTTON_GAP, buttonY, buttonW, BUTTON_H).build());
+		if (oreAllowed) {
+			buttonY += BUTTON_H + BUTTON_GAP;
+			oreButton = screen.addWidget(Button.builder(Component.empty(), b -> act(screen::beginOreRetrogen))
+				.tooltip(Tooltip.create(Component.translatable("gui.retrograde.manipulate.regen_ores.tip")))
+				.bounds(x + PAD, buttonY, fullW, BUTTON_H).build());
+		}
 
 		closeButton = screen.addWidget(Button.builder(Component.literal("X"), b -> close())
 			.tooltip(Tooltip.create(Component.translatable("gui.retrograde.chunk_map.filter.close.tip")))
@@ -157,7 +202,7 @@ final class ManipulationOverlay {
 	}
 
 	private void syncWidgets() {
-		for (Button b : List.of(regenButton, undoButton, retrogenButton, biomeButton, closeButton)) {
+		for (Button b : new Button[] {regenButton, undoButton, retrogenButton, biomeButton, oreButton, closeButton}) {
 			if (b != null) b.visible = open;
 		}
 		if (!open) return;
@@ -173,10 +218,16 @@ final class ManipulationOverlay {
 		biomeButton.visible = biomeAllowed;
 		biomeButton.setMessage(Component.translatable("gui.retrograde.manipulate.set_biome", targets.size()));
 		biomeButton.active = any;
+		// Null whenever ore editing is off, since layout() doesn't build the
+		// row at all in that case rather than building it and hiding it.
+		if (oreButton != null) {
+			oreButton.setMessage(Component.translatable("gui.retrograde.manipulate.regen_ores", targets.size()));
+			oreButton.active = any;
+		}
 	}
 
 	void draw(Painter painter, int mouseX, int mouseY) {
-		painter.dropShadow(x, y, WIDTH, h, COLOR_OVERLAY_SHADOW, 5);
+		painter.dropShadow(x, y, WIDTH, h, COLOR_OVERLAY_SHADOW, OVERLAY_SHADOW_SPREAD);
 		painter.roundedPanel(x, y, WIDTH, h, COLOR_OVERLAY_BG, COLOR_OVERLAY_EDGE_LIGHT, COLOR_OVERLAY_EDGE_DARK);
 
 		var font = screen.font();

@@ -62,6 +62,17 @@ final class SettingsOverlay {
 		return open && screen.isOverChip(mouseX, mouseY, x, y, WIDTH, h);
 	}
 
+	/**
+	 * Whether this overlay covers the given rectangle, shadow included, so
+	 * the map can take its own widgets out of the render pass rather than let
+	 * them draw over the panel. See ChunkMapScreen#syncOverlayOcclusion.
+	 */
+	boolean occludes(int wx, int wy, int ww, int wh) {
+		if (!open) return false;
+		int spread = OVERLAY_SHADOW_SPREAD;
+		return rectsOverlap(x - spread, y - spread, WIDTH + spread * 2, h + spread * 2, wx, wy, ww, wh);
+	}
+
 	void layout(int screenWidth, int screenHeight) {
 		lastScreenW = screenWidth;
 		lastScreenH = screenHeight;
@@ -188,7 +199,7 @@ final class SettingsOverlay {
 	}
 
 	void draw(Painter painter, int mouseX, int mouseY) {
-		painter.dropShadow(x, y, WIDTH, h, COLOR_OVERLAY_SHADOW, 5);
+		painter.dropShadow(x, y, WIDTH, h, COLOR_OVERLAY_SHADOW, OVERLAY_SHADOW_SPREAD);
 		painter.roundedPanel(x, y, WIDTH, h, COLOR_OVERLAY_BG, COLOR_OVERLAY_EDGE_LIGHT, COLOR_OVERLAY_EDGE_DARK);
 
 		var font = screen.font();
