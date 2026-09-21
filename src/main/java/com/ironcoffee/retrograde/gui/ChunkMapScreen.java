@@ -163,6 +163,8 @@ public class ChunkMapScreen extends Screen {
 	private static final int FILTER_PANEL_WIDTH = 176;
 	private static final int MIN_SIDE_PANEL_WIDTH = 116;
 	private static final int FILTER_ROW_H = 18;
+	/** Floor for a shrinking filter row: below this a vanilla button's label clips. */
+	private static final int MIN_FILTER_ROW_H = 13;
 	private static final int FILTER_ROW_GAP = 3;
 
 	/**
@@ -209,6 +211,21 @@ public class ChunkMapScreen extends Screen {
 	private static final int COLOR_SLIME_EDGE = 0x8055CC55;
 	private static final int COLOR_MATCH_TINT = 0x55D8A03C;
 	private static final int COLOR_MATCH_EDGE = 0xFFF0C060;
+
+	// ----- map mode palettes -----
+	/** Flat fill for a chunk whose data hasn't been read yet, in any data mode. */
+	private static final int COLOR_MODE_UNKNOWN = 0xFF2A2A2A;
+	/** Touched mode: deliberately two flat colours and nothing else. */
+	private static final int COLOR_MODE_TOUCHED = 0xFF3E8E3E;
+	private static final int COLOR_MODE_UNTOUCHED = 0xFF394453;
+	/**
+	 * Ore density ramp, coldest to hottest, interpolated between stops. Five
+	 * stops rather than a smooth hue sweep because a sweep through green
+	 * reads as "more" in one half and "different" in the other.
+	 */
+	private static final int[] ORE_RAMP = {
+		0xFF223355, 0xFF2E6E8E, 0xFF49A05A, 0xFFD8B24C, 0xFFD85A3C
+	};
 
 	private final ChunkMapDataCache dataCache = new ChunkMapDataCache();
 
@@ -276,6 +293,43 @@ public class ChunkMapScreen extends Screen {
 	/** Whether the full ore breakdown is pinned open beside the info panel. */
 	private boolean oreListOpen;
 
+	// ----- map modes -----
+
+	/**
+	 * What the chunk squares are coloured by.
+	 *
+	 * TERRAIN is the map; the rest are the map answering one question each,
+	 * and they replace the terrain rather than tinting over it. Tinting was
+	 * the obvious first idea and it's wrong: a translucent wash over a
+	 * screenshot of the world is unreadable at a glance precisely because
+	 * the terrain underneath is doing its job. A biome map is only useful if
+	 * two chunks of the same biome look identical, which means the terrain
+	 * has to go.
+	 */
+	private enum MapMode {
+		TERRAIN("■"),
+		BIOME("B"),
+		ORES("O"),
+		TOUCHED("T");
+
+		final String icon;
+
+		MapMode(String icon) {
+			this.icon = icon;
+		}
+	}
+
+	private MapMode mapMode = MapMode.TERRAIN;
+	private Button mapModeButton;
+	/**
+	 * Highest ore count among the chunks on screen this frame, which is what
+	 * the density ramp normalises against. Per-frame and adaptive on purpose:
+	 * a fixed ceiling makes every chunk in a diamond-poor region the same
+	 * shade of cold, and the question the mode answers is "which of these" far
+	 * more often than "how many".
+	 */
+	private int oreScaleMax = 1;
+
 	// ----- chunk filter -----
 
 	/** Which chunks the filter is allowed to consider. */
@@ -287,11 +341,18 @@ public class ChunkMapScreen extends Screen {
 	/** Whether the picked ore has to be present or absent. */
 	private enum OreRule { HAS, WITHOUT }
 
+	/** Whether the filter wants slime chunks, non-slime chunks, or both. */
+	private enum Slime { ANY, YES, NO }
+
 	private boolean filterOpen;
 	private int filterX, filterY, filterH;
+	/** Row metrics shrink on a short window; see {@link #initFilterPanel}. */
+	private int filterRowH = FILTER_ROW_H;
+	private int filterRowGap = FILTER_ROW_GAP;
 	private Scope filterScope = Scope.ON_SCREEN;
 	private Touched filterTouched = Touched.ANY;
 	private OreRule filterOreRule = OreRule.HAS;
+	private Slime filterSlime = Slime.ANY;
 	/** Both are -1 for "any", otherwise an index into the list below it. */
 	private int filterBiomeIndex = -1;
 	private int filterOreIndex = -1;
@@ -310,6 +371,7 @@ public class ChunkMapScreen extends Screen {
 	private Button filterBiomeButton;
 	private Button filterOreButton;
 	private Button filterOreRuleButton;
+	private Button filterSlimeButton;
 	private Button filterSelectButton;
 	private Button filterRestoreButton;
 	private Button filterCloseButton;
@@ -328,7 +390,7 @@ public class ChunkMapScreen extends Screen {
 			recenterOnPlayer();
 		}
 
-		clusterW = ICON_SIZE * 5 + ICON_GAP * 4;
+		clusterW = ICON_SIZE * 6 + ICON_GAP * 5;
 		clusterH = ICON_SIZE;
 		clusterX = width - CHIP_MARGIN - clusterW;
 		clusterY = CHIP_MARGIN;
@@ -345,6 +407,13 @@ public class ChunkMapScreen extends Screen {
 		addRenderableWidget(Button.builder(Component.literal("R"), b -> recenterOnPlayer())
 			.tooltip(Tooltip.create(Component.translatable("gui.retrograde.chunk_map.recenter")))
 			.bounds(x, clusterY, ICON_SIZE, ICON_SIZE).build());
+		x += ICON_SIZE + ICON_GAP;
+		// Cycles rather than opening a picker: there are four modes, switching
+		// between them is something you do while comparing, and a menu between
+		// each comparison is a menu you stop using.
+		mapModeButton = addRenderableWidget(Button.builder(Component.literal(mapMode.icon), b -> cycleMapMode())
+			.bounds(x, clusterY, ICON_SIZE, ICON_SIZE).build());
+		syncMapModeButton();
 		x += ICON_SIZE + ICON_GAP;
 		addRenderableWidget(Button.builder(Component.literal("⚙"), b -> openSettings())
 			.tooltip(Tooltip.create(Component.translatable("gui.retrograde.chunk_map.settings")))
@@ -482,26 +551,51 @@ public class ChunkMapScreen extends Screen {
 		filterY = sidePanelY;
 		int rowW = sidePanelW - PANEL_PAD * 2;
 		int rowX = filterX + PANEL_PAD;
+
+		// Eight rows of controls, and no row here is droppable the way the ore
+		// icon grid was - each one is a criterion, and a filter missing a
+		// criterion is a filter that quietly can't answer a question. So the
+		// rows get shorter instead, down to a floor that still leaves a
+		// vanilla button legible, and only then does the panel start from the
+		// top margin regardless of where the slot wanted it.
+		int rowsTall = 8;
+		int chrome = PANEL_PAD * 2 + (LINE_H + 2) * 2;
+		filterRowH = FILTER_ROW_H;
+		filterRowGap = FILTER_ROW_GAP;
+		while (filterRowH > MIN_FILTER_ROW_H
+			&& filterY + chrome + rowsTall * (filterRowH + filterRowGap) > hintY) {
+			filterRowH--;
+			if (filterRowGap > 1) filterRowGap--;
+		}
+		if (filterY > CHIP_MARGIN
+			&& filterY + chrome + rowsTall * (filterRowH + filterRowGap) > hintY) {
+			// The slot put it under the icon cluster to keep the map's middle
+			// clear; that's a nicety, and fitting on screen isn't.
+			filterY = CHIP_MARGIN;
+		}
+
 		int y = filterY + PANEL_PAD + LINE_H + 2;
 
 		filterScopeButton = addFilterButton(rowX, y, rowW, "gui.retrograde.chunk_map.filter.scope.tip", b -> cycleScope());
-		y += FILTER_ROW_H + FILTER_ROW_GAP;
+		y += filterRowH + filterRowGap;
 		filterTouchedButton = addFilterButton(rowX, y, rowW, "gui.retrograde.chunk_map.filter.touched.tip", b -> cycleTouched());
-		y += FILTER_ROW_H + FILTER_ROW_GAP;
+		y += filterRowH + filterRowGap;
+		filterSlimeButton = addFilterButton(rowX, y, rowW, "gui.retrograde.chunk_map.filter.slime.tip", b -> cycleSlime());
+		y += filterRowH + filterRowGap;
 		filterBiomeButton = addFilterButton(rowX, y, rowW, "gui.retrograde.chunk_map.filter.biome.tip", b -> cycleBiome());
-		y += FILTER_ROW_H + FILTER_ROW_GAP;
+		y += filterRowH + filterRowGap;
 		filterOreButton = addFilterButton(rowX, y, rowW, "gui.retrograde.chunk_map.filter.ore.tip", b -> cycleOre());
-		y += FILTER_ROW_H + FILTER_ROW_GAP;
+		y += filterRowH + filterRowGap;
 		filterOreRuleButton = addFilterButton(rowX, y, rowW, "gui.retrograde.chunk_map.filter.ore_rule.tip", b -> cycleOreRule());
-		y += FILTER_ROW_H + FILTER_ROW_GAP + LINE_H + 2;
+		y += filterRowH + filterRowGap + LINE_H + 2;
 
 		filterSelectButton = addFilterButton(rowX, y, rowW, "gui.retrograde.chunk_map.filter.select.tip", b -> selectMatches());
-		y += FILTER_ROW_H + FILTER_ROW_GAP;
-		int half = (rowW - FILTER_ROW_GAP) / 2;
+		y += filterRowH + filterRowGap;
+		int half = (rowW - filterRowGap) / 2;
 		filterRestoreButton = addFilterButton(rowX, y, half, "gui.retrograde.chunk_map.filter.restore.tip", b -> restoreLastSelection());
-		filterCloseButton = addFilterButton(rowX + half + FILTER_ROW_GAP, y, rowW - half - FILTER_ROW_GAP,
+		filterCloseButton = addFilterButton(rowX + half + filterRowGap, y, rowW - half - filterRowGap,
 			"gui.retrograde.chunk_map.filter.close.tip", b -> toggleFilter());
-		y += FILTER_ROW_H;
+		y += filterRowH;
 
 		filterH = y + PANEL_PAD - filterY;
 		// init() runs again on every window resize, so a panel that was open
@@ -517,7 +611,7 @@ public class ChunkMapScreen extends Screen {
 	private Button addFilterButton(int x, int y, int w, String tooltipKey, Button.OnPress onPress) {
 		Button button = addRenderableWidget(Button.builder(Component.empty(), onPress)
 			.tooltip(Tooltip.create(Component.translatable(tooltipKey)))
-			.bounds(x, y, w, FILTER_ROW_H)
+			.bounds(x, y, w, filterRowH)
 			.build());
 		button.visible = false;
 		return button;
@@ -745,7 +839,12 @@ public class ChunkMapScreen extends Screen {
 		boolean slimeChunks = RetrogradeConfig.showSlimeChunks() && isOverworld(dimension);
 		long worldSeed = serverLevel.getSeed();
 
-		for (VisibleChunk chunk : computeVisibleChunks()) {
+		List<VisibleChunk> visible = computeVisibleChunks();
+		if (mapMode == MapMode.ORES) {
+			oreScaleMax = highestOreCount(visible);
+		}
+
+		for (VisibleChunk chunk : visible) {
 			dataCache.request(minecraft, server, serverLevel, chunk.pos());
 			ChunkMapDataCache.Status status = dataCache.statusOf(chunk.pos());
 			int x1 = chunk.screenX();
@@ -753,17 +852,25 @@ public class ChunkMapScreen extends Screen {
 			int x2 = x1 + chunk.size();
 			int y2 = y1 + chunk.size();
 
-			if (status == ChunkMapDataCache.Status.READY) {
-				ResourceLocation texture = dataCache.textureOf(chunk.pos());
-				painter.chunkTexture(texture, x1, y1, chunk.size());
+			if (status == ChunkMapDataCache.Status.UNGENERATED) {
+				// Same grey in every mode. Nothing generated there, so there's
+				// no biome to colour and no ore to count - saying so once,
+				// consistently, beats four different ways to say "no data".
+				painter.fill(x1, y1, x2, y2, COLOR_UNGENERATED);
+			} else if (status != ChunkMapDataCache.Status.READY) {
+				painter.fill(x1, y1, x2, y2, COLOR_PENDING);
+			} else if (mapMode == MapMode.TERRAIN) {
+				painter.chunkTexture(dataCache.textureOf(chunk.pos()), x1, y1, chunk.size());
 			} else {
-				painter.fill(x1, y1, x2, y2,
-					status == ChunkMapDataCache.Status.UNGENERATED ? COLOR_UNGENERATED : COLOR_PENDING);
+				painter.fill(x1, y1, x2, y2, modeColor(chunk.pos(), dimension, tracker));
 			}
 
 			if (chunk.pos().equals(playerChunk)) {
 				painter.fill(x1, y1, x2, y2, COLOR_PLAYER_TINT);
-			} else if (tracker.statusOf(dimension, chunk.pos()) == ChunkTracker.Status.TOUCHED) {
+			} else if (mapMode != MapMode.TOUCHED
+				&& tracker.statusOf(dimension, chunk.pos()) == ChunkTracker.Status.TOUCHED) {
+				// Skipped in TOUCHED mode: the fill underneath already says it,
+				// and a wash over half the squares in a two-colour map is noise.
 				painter.fill(x1, y1, x2, y2, COLOR_TOUCHED_TINT);
 			}
 
@@ -814,6 +921,123 @@ public class ChunkMapScreen extends Screen {
 		if (filterOpen) {
 			drawFilterPanel(painter);
 		}
+	}
+
+	private void cycleMapMode() {
+		mapMode = next(MapMode.values(), mapMode.ordinal());
+		syncMapModeButton();
+	}
+
+	private void syncMapModeButton() {
+		if (mapModeButton == null) return;
+		mapModeButton.setMessage(Component.literal(mapMode.icon));
+		// The tooltip names the mode you're in rather than the one you'd get by
+		// clicking. A cycling button with four stops can't usefully promise
+		// where it lands, and "what am I looking at" is the question someone
+		// hovering a one-letter icon is actually asking.
+		mapModeButton.setTooltip(Tooltip.create(Component.translatable("gui.retrograde.chunk_map.mode",
+			Component.translatable("gui.retrograde.chunk_map.mode." + mapMode.name().toLowerCase(java.util.Locale.ROOT)))));
+	}
+
+	/**
+	 * The flat colour a chunk gets in whichever non-terrain mode is active.
+	 * Only called for chunks the cache has read, so "no data" here means the
+	 * read produced no inspection rather than that the chunk isn't generated.
+	 */
+	private int modeColor(ChunkPos pos, ResourceKey<Level> dimension, ChunkTracker tracker) {
+		switch (mapMode) {
+			case TOUCHED:
+				return tracker.statusOf(dimension, pos) == ChunkTracker.Status.TOUCHED
+					? COLOR_MODE_TOUCHED : COLOR_MODE_UNTOUCHED;
+			case BIOME: {
+				ChunkResourceInfo.Inspection inspection = dataCache.inspectionOf(pos);
+				if (inspection == null || inspection.biome() == null) return COLOR_MODE_UNKNOWN;
+				return biomeColor(inspection.biome());
+			}
+			case ORES: {
+				ChunkResourceInfo.Inspection inspection = dataCache.inspectionOf(pos);
+				if (inspection == null) return COLOR_MODE_UNKNOWN;
+				return rampColor(totalOres(inspection) / (float) Math.max(1, oreScaleMax));
+			}
+			default:
+				return COLOR_MODE_UNKNOWN;
+		}
+	}
+
+	private int highestOreCount(List<VisibleChunk> visible) {
+		int max = 1;
+		for (VisibleChunk chunk : visible) {
+			if (dataCache.statusOf(chunk.pos()) != ChunkMapDataCache.Status.READY) continue;
+			ChunkResourceInfo.Inspection inspection = dataCache.inspectionOf(chunk.pos());
+			if (inspection != null) max = Math.max(max, totalOres(inspection));
+		}
+		return max;
+	}
+
+	private static int totalOres(ChunkResourceInfo.Inspection inspection) {
+		int total = 0;
+		for (ChunkResourceInfo.Entry entry : inspection.ores()) {
+			total += entry.count();
+		}
+		return total;
+	}
+
+	/** Position along {@link #ORE_RAMP}, linearly interpolated between stops. */
+	private static int rampColor(float t) {
+		t = Math.max(0f, Math.min(1f, t));
+		float scaled = t * (ORE_RAMP.length - 1);
+		int lo = (int) scaled;
+		int hi = Math.min(ORE_RAMP.length - 1, lo + 1);
+		return lerpColor(ORE_RAMP[lo], ORE_RAMP[hi], scaled - lo);
+	}
+
+	private static int lerpColor(int a, int b, float t) {
+		int r = Math.round(((a >> 16) & 0xFF) + (((b >> 16) & 0xFF) - ((a >> 16) & 0xFF)) * t);
+		int g = Math.round(((a >> 8) & 0xFF) + (((b >> 8) & 0xFF) - ((a >> 8) & 0xFF)) * t);
+		int bl = Math.round((a & 0xFF) + ((b & 0xFF) - (a & 0xFF)) * t);
+		return 0xFF000000 | (r << 16) | (g << 8) | bl;
+	}
+
+	/**
+	 * A stable colour per biome id, derived from the id itself rather than
+	 * from a table.
+	 *
+	 * A hand-picked palette would look better and would be wrong the moment a
+	 * mod adds a biome, which - for a mod whose whole purpose is adding mods
+	 * to an existing world - is the normal case rather than the edge one.
+	 * Hashing gives every biome a colour, including ones that didn't exist
+	 * when this was written, and the same one every time you open the map.
+	 *
+	 * Hue is where the entropy goes; saturation and lightness get narrow
+	 * bands so that no biome comes out near-black or near-white and every
+	 * pair of adjacent biomes is told apart by hue, which is the channel
+	 * that survives being a 12-pixel square.
+	 */
+	private static int biomeColor(ResourceLocation biome) {
+		int hash = biome.toString().hashCode();
+		float hue = ((hash >>> 8) % 360) / 360f;
+		float saturation = 0.45f + ((hash >>> 20) & 0x0F) / 60f;
+		float lightness = 0.38f + ((hash >>> 26) & 0x0F) / 90f;
+		return 0xFF000000 | (hslToRgb(hue, saturation, lightness) & 0xFFFFFF);
+	}
+
+	private static int hslToRgb(float h, float s, float l) {
+		float c = (1 - Math.abs(2 * l - 1)) * s;
+		float hp = h * 6f;
+		float x = c * (1 - Math.abs(hp % 2 - 1));
+		float r = 0, g = 0, b = 0;
+		if (hp < 1) { r = c; g = x; }
+		else if (hp < 2) { r = x; g = c; }
+		else if (hp < 3) { g = c; b = x; }
+		else if (hp < 4) { g = x; b = c; }
+		else if (hp < 5) { r = x; b = c; }
+		else { r = c; b = x; }
+		float m = l - c / 2;
+		return (channel(r + m) << 16) | (channel(g + m) << 8) | channel(b + m);
+	}
+
+	private static int channel(float v) {
+		return Math.max(0, Math.min(255, Math.round(v * 255)));
 	}
 
 	private void drawDragBox(Painter painter) {
@@ -1017,6 +1241,11 @@ public class ChunkMapScreen extends Screen {
 		refreshNow();
 	}
 
+	private void cycleSlime() {
+		filterSlime = next(Slime.values(), filterSlime.ordinal());
+		refreshNow();
+	}
+
 	private void cycleTouched() {
 		filterTouched = next(Touched.values(), filterTouched.ordinal());
 		refreshNow();
@@ -1068,6 +1297,12 @@ public class ChunkMapScreen extends Screen {
 		}
 		ResourceKey<Level> dimension = player.level().dimension();
 		ChunkTracker tracker = ChunkTracker.forServer(server);
+		// Same rule the map draws by: the slime maths produces a perfectly
+		// convincing pattern in any dimension and means nothing outside the
+		// overworld, so off there the criterion matches everything rather than
+		// quietly matching a lie.
+		ServerLevel slimeLevel = isOverworld(dimension) ? server.getLevel(dimension) : null;
+		long slimeSeed = slimeLevel == null ? 0L : slimeLevel.getSeed();
 
 		List<ChunkPos> candidates = filterCandidates(playerChunk(player));
 		refreshFilterChoices(candidates);
@@ -1084,6 +1319,12 @@ public class ChunkMapScreen extends Screen {
 			boolean touched = tracker.statusOf(dimension, pos) == ChunkTracker.Status.TOUCHED;
 			if (filterTouched == Touched.YES && !touched) continue;
 			if (filterTouched == Touched.NO && touched) continue;
+
+			if (filterSlime != Slime.ANY && slimeLevel != null) {
+				boolean slime = isSlimeChunk(slimeSeed, pos);
+				if (filterSlime == Slime.YES && !slime) continue;
+				if (filterSlime == Slime.NO && slime) continue;
+			}
 
 			ChunkResourceInfo.Inspection inspection = dataCache.inspectionOf(pos);
 			if (biome != null && (inspection == null || !biome.equals(inspection.biome()))) continue;
@@ -1174,7 +1415,7 @@ public class ChunkMapScreen extends Screen {
 	}
 
 	private void syncFilterButtons() {
-		for (Button button : List.of(filterScopeButton, filterTouchedButton, filterBiomeButton,
+		for (Button button : List.of(filterScopeButton, filterTouchedButton, filterSlimeButton, filterBiomeButton,
 				filterOreButton, filterOreRuleButton, filterSelectButton, filterRestoreButton, filterCloseButton)) {
 			button.visible = filterOpen;
 		}
@@ -1184,6 +1425,12 @@ public class ChunkMapScreen extends Screen {
 			Component.translatable("gui.retrograde.chunk_map.filter.scope." + filterScope.name().toLowerCase(java.util.Locale.ROOT))));
 		filterTouchedButton.setMessage(Component.translatable("gui.retrograde.chunk_map.filter.touched",
 			Component.translatable("gui.retrograde.chunk_map.filter.touched." + filterTouched.name().toLowerCase(java.util.Locale.ROOT))));
+		filterSlimeButton.setMessage(Component.translatable("gui.retrograde.chunk_map.filter.slime",
+			Component.translatable("gui.retrograde.chunk_map.filter.slime." + filterSlime.name().toLowerCase(java.util.Locale.ROOT))));
+		// Greyed out rather than hidden outside the overworld: a row that comes
+		// and goes as you walk through a portal is a row you can't find again.
+		filterSlimeButton.active = minecraft != null && minecraft.player != null
+			&& isOverworld(minecraft.player.level().dimension());
 
 		ResourceLocation biome = choice(biomeChoices, filterBiomeIndex);
 		filterBiomeButton.setMessage(biome == null

@@ -50,6 +50,16 @@ earlier versions had. Renders real terrain (same color-per-block approach
 vanilla's held map item uses) with a translucent tint over touched chunks
 and your own position, plus chunk grid lines.
 
+An icon in the cluster cycles what the squares are coloured by: Terrain,
+Biomes, Ore density, or Where you've been. The three data modes replace the
+terrain rather than washing over it - a biome map is only useful if two
+chunks of the same biome look identical, which they can't while the terrain
+underneath is still doing its job. Biome colours are hashed from the biome
+id, so a biome some other mod added gets a stable colour of its own instead
+of falling off a hand-written palette. Ore density normalises against the
+densest chunk currently on screen, so an ore-poor region still separates out
+rather than reading as uniformly cold.
+
 Chunks the server has in memory are read from memory; everything else is
 decoded straight out of the region file, so the map covers everywhere
 you've explored rather than the few hundred blocks around you. Grey means
@@ -118,8 +128,11 @@ fighting each other.
 
 Find opens a filter panel beside the info panel: pick a scope (what's on
 screen, within 4/8/16 chunks of you, or everywhere the map has read), then
-narrow it by touched/untouched, by biome, and by an ore having to be present
-or absent. The biome and ore choices are cycled from what's actually out
+narrow it by touched/untouched, by whether the chunk is a slime chunk, by
+biome, and by an ore having to be present or absent. The slime row greys out
+outside the overworld rather than disappearing, since a row that comes and
+goes as you walk through a portal is a row you can't find again. The biome
+and ore choices are cycled from what's actually out
 there rather than typed, so there's nothing to spell and no way to land on a
 filter that can't match. Matches light up amber on the map as you change the
 filter, with a live count and one button to select all of them - nearest

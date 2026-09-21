@@ -123,3 +123,17 @@
   dropped for the duration and handed back when the job ends, however it
   ends. Anything still loaded after that is still reported as skipped and
   never forced - forcing it would write a silently half-regenerated chunk
+- Added map modes behind an icon in the cluster that cycles Terrain, Biomes,
+  Ore density and Where you've been. The three data modes replace the terrain
+  rather than tinting over it: a biome map is only useful if two chunks of the
+  same biome look identical, which they can't while the terrain underneath is
+  doing its job. Biome colours are hashed from the biome id so modded biomes
+  get one too, and ore density normalises against the densest chunk on screen
+  so a poor region still separates instead of reading as uniformly cold
+- Added a slime row to the chunk filter: slime only, non-slime only, or
+  either. Greyed out rather than hidden outside the overworld, where the
+  pattern is meaningless
+- The filter panel's rows shrink on a short window down to a legibility floor,
+  and the panel starts from the top margin rather than below the icon cluster
+  if that's what it takes to fit. No filter row is droppable the way the ore
+  grid's were - a filter missing a criterion quietly can't answer a question
