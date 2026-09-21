@@ -69,28 +69,28 @@ places, and "more ore" becomes "run it again" rather than a number to type
 in. "Less ore" has no equivalent and probably shouldn't - removing ore from
 a chunk you may have already mined is a diff problem, not a generation one.
 
-## Progress screen hardening
+## What the progress screen still can't survive
 
-Still outstanding, and the reason the settings screen already carries the
-timeouts and the opaque-backdrop toggle that these will use:
+The cancel ladder, the watchdog and the force-load fallback are built (see
+ChunkRegenJob and RegenProgressScreen), and between them they cover a
+server thread that stops answering. What they don't cover is the client
+going away: a crash, an OOM kill, or pulling the power mid-regen still
+leaves the player at the staging position above the build height, with
+gravity and damage off and the remaining chunks unprocessed, because the
+only record that a job was running lived in client memory.
 
-- The backdrop setting exists and persists but RegenProgressScreen doesn't
-  read it yet, so the screen is still whatever it was. The point of it is
-  that regen parks you above the build height and brings you back, and
-  watching that happen through a translucent screen reads as the game
-  having broken.
-- `watchdogTimeoutSeconds` is stored and clamped but nothing watches. What
-  it's for: a job that stops making progress at all (a chunk that won't
-  unload for a reason the 30-second unload timeout doesn't cover, a step
-  that throws) should abort itself, restore the saved player position and
-  flags, and say so - rather than leaving the screen spinning on a job
-  that will never advance.
-- Cancel finishes the current chunk cleanly, which is right, but there's no
-  second press that means "stop now, I'll take the mess" for when the
-  clean path is itself what's wedged.
-- None of this covers a hard client kill mid-regen, which still strands the
-  player at the staging position. That needs the persisted-job work in the
-  gaps list below.
+The watchdog can't help there by construction - it runs on the client tick,
+which is exactly what stopped. Fixing it means persisting the job (target
+list, phase, and the saved return position and flags) to the world folder
+and resuming or unwinding it on next load, which wants the per-loader
+server tick hook described in the gaps below.
+
+A smaller piece worth doing first, and independently useful: write just the
+staging record - position, rotation, invulnerable and no-gravity flags - to
+the world folder when the job stages the player, and delete it when the job
+puts them back. On world load, if that file exists, put the player back and
+delete it. That alone turns "stranded forever" into "one awkward reload",
+without needing the job itself to be resumable.
 
 ## Other known gaps
 

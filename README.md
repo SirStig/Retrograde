@@ -133,13 +133,38 @@ the ore tallied across the whole selection.
 
 All three actions run over the whole selection behind a progress screen -
 phase, progress bar, which chunk it's on, and done/skipped/failed counts,
-with a Cancel that stops cleanly instead of abandoning you mid-run. Regen
-can't touch a chunk that's currently loaded (a loaded chunk saves itself
-back over the edit), so rather than refusing, the job parks you above the
-build height clear of the selection, waits for the chunks to unload, does
-the work, and puts you back exactly where you were. Anything still loaded
-after 30 seconds - forced chunks, spawn chunks - is reported as skipped
-rather than forced.
+over a backdrop that's opaque by default. Regen can't touch a chunk that's
+currently loaded (a loaded chunk saves itself back over the edit), so rather
+than refusing, the job parks you above the build height clear of the
+selection, waits for the chunks to unload, does the work, and puts you back
+exactly where you were. The opaque backdrop is there because watching that
+happen through a translucent screen reads as the game having broken.
+
+Cancel is a ladder rather than one button, because this screen is also the
+job's clock and so can't afford a state where its only control is greyed
+out. Cancel stops at the next clean chunk boundary. Pressing it again is
+Force cancel: stop now, put me back, I'll take a half-written chunk. If even
+that doesn't land within three seconds, Leave anyway appears, which lets go
+of the job so the screen can close - the one button here that can leave a
+mess, and it says so on screen rather than in a log. Escape climbs the same
+ladder, since pressing Escape harder at a screen that won't close should get
+you somewhere.
+
+Behind that, a watchdog on the client tick notices when nothing at all has
+moved for a configurable interval and aborts the job itself, putting you
+back. It has to run on the client tick specifically: every failure mode that
+strands someone above the build height is one where the *server* thread
+stopped answering, so a watchdog scheduled onto that thread would be stuck
+in the queue behind the thing it was meant to rescue you from. If its rescue
+doesn't land either, the screen offers to try again rather than pretending.
+
+A chunk that won't leave memory gets one real fallback before being written
+off. If it's force-loaded, the job drops the ticket, waits another round,
+and puts the ticket back when the job ends however it ends - reversible, and
+a chunk about to be regenerated doesn't mind having spent a few seconds not
+force-loaded. Anything still loaded after that is reported as skipped and
+named as such, never forced out, because forcing it would produce a silently
+half-regenerated chunk instead of an honest skip.
 
 The keybinding to open the map defaults to O, picked for being free rather
 than for being memorable: M and Y are minimap territory, J is JourneyMap, R
@@ -160,11 +185,15 @@ were confirmed to render, screenshotted live in a 1.20.1 world.
 
 The selection UI, the progress screen, the teleport-out-and-back regen job,
 the saved-chunk reader, the chunk filter, the regen preview, the responsive
-layout, the Chunk Manipulation menu, the settings screen, slime chunks and
-biome editing are new and have a clean compile on all six targets behind
-them, nothing more. The responsive layout's thresholds were worked out
-against the arithmetic rather than by looking at it, so the tiers are
-reasoned, not seen.
+layout, the Chunk Manipulation menu, the settings screen, slime chunks,
+biome editing and the progress screen's watchdog, cancel ladder and
+force-load fallback are new and have a clean compile on all six targets
+behind them, nothing more. The responsive layout's thresholds were worked
+out against the arithmetic rather than by looking at it, so the tiers are
+reasoned, not seen. The watchdog in particular has never been seen to fire:
+provoking it means wedging a server thread on purpose, so what's verified is
+that it compiles and that the path it takes is the same restore the normal
+ending uses.
 
 Four things there were checked against the shipped classes rather than
 assumed, because all four would fail silently or crash on a version that

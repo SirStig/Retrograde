@@ -129,5 +129,17 @@
   "gui.retrograde.settings.biome_edit.tip": "Let Chunk Manipulation rewrite a chunk's biome in place.",
   "gui.retrograde.settings.ore_edit": "  Ore editing",
   "gui.retrograde.settings.ore_edit.tip": "Let Chunk Manipulation change how much ore a chunk holds. Not built yet — the toggle is here, the operation isn't.",
-  "gui.retrograde.chunk_map.panel.slime": "Slime"
+  "gui.retrograde.chunk_map.panel.slime": "Slime",
+  "gui.retrograde.job.phase.unloading_released": "Released %s force-load(s), waiting… (%ss)",
+  "gui.retrograde.job.phase.force_cancelled": "Stopped — the chunk in progress may be incomplete",
+  "gui.retrograde.job.phase.watchdog": "No progress for %ss — aborted and put you back",
+  "gui.retrograde.job.phase.abandoned": "Abandoned — the server stopped responding",
+  "gui.retrograde.job.phase.done_stubborn": "Done — %s chunk(s) stayed loaded and were skipped",
+  "gui.retrograde.job.force_cancel": "Force cancel",
+  "gui.retrograde.job.stopping": "Stopping…",
+  "gui.retrograde.job.leave": "Leave anyway",
+  "gui.retrograde.job.close_anyway": "Close",
+  "gui.retrograde.job.retry_restore": "Try to put me back",
+  "gui.retrograde.job.warn.stranded": "You may still be above the world with gravity off.",
+  "gui.retrograde.job.warn.stubborn": "%s chunk(s) never unloaded — skipping those"
 }

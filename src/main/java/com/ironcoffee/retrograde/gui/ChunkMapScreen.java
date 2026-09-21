@@ -1631,7 +1631,10 @@ public class ChunkMapScreen extends Screen {
 			openScreen(this);
 			return;
 		}
-		ChunkRegenJob job = ChunkRegenJob.start(server, serverLevel, player.getUUID(), mode, targets, integration);
+		// Timeouts are read here rather than inside the job: settings hang off
+		// Minecraft.getInstance(), and the job runs on the server thread.
+		ChunkRegenJob job = ChunkRegenJob.start(server, serverLevel, player.getUUID(), mode, targets, integration,
+			RetrogradeConfig.unloadTimeoutSeconds(), RetrogradeConfig.watchdogTimeoutSeconds());
 		if (job == null) {
 			showNotice(Component.translatable("gui.retrograde.job.already_running").getString());
 			openScreen(this);

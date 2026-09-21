@@ -46,8 +46,13 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public final class ChunkRegenJob {
 	/** How many chunks to handle per step, so one tick can't stall on a huge selection. */
 	private static final int CHUNKS_PER_STEP = 4;
-	/** Give up waiting for chunks to unload after 30s and report the stragglers as skipped. */
-	private static final int UNLOAD_TIMEOUT_TICKS = 600;
+	/**
+	 * How long the watchdog gives its own rescue attempt before the job is
+	 * declared unrecoverable and the screen is allowed to let go of it. Short,
+	 * because by this point the server thread has already missed a whole
+	 * watchdog window - if it were going to answer, it would have.
+	 */
+	private static final int WATCHDOG_GRACE_TICKS = 60;
 	/** Extra chunks beyond view distance to put between the player and the work area. */
 	private static final int STAGING_MARGIN_CHUNKS = 4;
 	/** pump() is driven by the progress screen's client tick, so a step is a tick. */
@@ -76,6 +81,20 @@ public final class ChunkRegenJob {
 		FINISHED
 	}
 
+	/** How a finished job got to FINISHED, for the screen to be honest about. */
+	public enum Outcome {
+		/** Ran to the end of the selection. */
+		COMPLETED,
+		/** Stopped because someone asked it to, cleanly. */
+		CANCELLED,
+		/** Stopped mid-chunk because someone asked it to stop now. */
+		FORCE_CANCELLED,
+		/** Stopped itself: no step landed for a whole watchdog window. */
+		WATCHDOG,
+		/** Gave up on the server thread answering at all. */
+		ABANDONED
+	}
+
 	private final MinecraftServer server;
 	private final ServerLevel level;
 	private final UUID playerId;
@@ -83,32 +102,56 @@ public final class ChunkRegenJob {
 	private final List<ChunkPos> targets;
 	private final RetrogenIntegration integration;
 
+	/** Ticks to wait for chunks to leave memory, per round. From settings. */
+	private final int unloadTimeoutTicks;
+	/** Ticks without a single step landing before the watchdog steps in. From settings. */
+	private final int watchdogTicks;
+
 	private final AtomicBoolean stepQueued = new AtomicBoolean();
 
 	private volatile Phase phase;
+	private volatile Outcome outcome = Outcome.COMPLETED;
 	private volatile int index;
 	private volatile int succeeded;
 	private volatile int skipped;
 	private volatile int failed;
 	private volatile boolean cancelRequested;
+	private volatile boolean forceCancelRequested;
 	private volatile ChunkPos currentChunk;
 	private volatile int waitTicks;
+	/** Targets still in memory when the first unload round ran out. */
+	private volatile int stubbornChunks;
+	/** Force-load tickets this job released to get a chunk to unload. */
+	private volatile int releasedTickets;
+	/** True while the player is parked at the staging position. */
+	private volatile boolean staged;
+
+	// ----- watchdog state, client thread only -----
+	private long lastSignature = Long.MIN_VALUE;
+	private int stallTicks;
+	private boolean watchdogTripped;
 
 	// Where the player was before we moved them, so they can be put back.
-	private boolean staged;
 	private double returnX, returnY, returnZ;
 	private float returnYRot, returnXRot;
 	private boolean wasInvulnerable;
 	private boolean wasNoGravity;
 
+	/** Set once, so a second unload round doesn't release tickets all over again. */
+	private boolean forceLoadRoundDone;
+	private final List<ChunkPos> releasedForceLoads = new ArrayList<>();
+
 	private ChunkRegenJob(MinecraftServer server, ServerLevel level, UUID playerId, Mode mode,
-			List<ChunkPos> targets, RetrogenIntegration integration) {
+			List<ChunkPos> targets, RetrogenIntegration integration,
+			int unloadTimeoutSeconds, int watchdogTimeoutSeconds) {
 		this.server = server;
 		this.level = level;
 		this.playerId = playerId;
 		this.mode = mode;
 		this.targets = List.copyOf(targets);
 		this.integration = integration;
+		this.unloadTimeoutTicks = Math.max(1, unloadTimeoutSeconds) * 20;
+		this.watchdogTicks = Math.max(1, watchdogTimeoutSeconds) * 20;
 		this.phase = mode == Mode.RETROGEN ? Phase.WORKING : Phase.MOVING_PLAYER;
 	}
 
@@ -116,10 +159,17 @@ public final class ChunkRegenJob {
 	 * Starts a job, or returns null if one is already running for this
 	 * server - two jobs moving the same player around would fight over
 	 * where to put them back.
+	 *
+	 * The two timeouts come in as numbers rather than being read from
+	 * settings here on purpose: settings live behind Minecraft.getInstance(),
+	 * and this class runs on the server thread and has no business loading a
+	 * client class to find out how long to wait.
 	 */
 	public static ChunkRegenJob start(MinecraftServer server, ServerLevel level, UUID playerId, Mode mode,
-			List<ChunkPos> targets, RetrogenIntegration integration) {
-		ChunkRegenJob job = new ChunkRegenJob(server, level, playerId, mode, targets, integration);
+			List<ChunkPos> targets, RetrogenIntegration integration,
+			int unloadTimeoutSeconds, int watchdogTimeoutSeconds) {
+		ChunkRegenJob job = new ChunkRegenJob(server, level, playerId, mode, targets, integration,
+			unloadTimeoutSeconds, watchdogTimeoutSeconds);
 		return ACTIVE.putIfAbsent(server, job) == null ? job : null;
 	}
 
@@ -147,14 +197,154 @@ public final class ChunkRegenJob {
 	 * behind it.
 	 */
 	public void pump() {
+		if (phase == Phase.FINISHED) return;
+		watchdog();
 		if (phase == Phase.FINISHED || !stepQueued.compareAndSet(false, true)) {
 			return;
 		}
 		server.execute(this::step);
 	}
 
+	/**
+	 * Notices when the job has stopped moving and does something about it.
+	 *
+	 * This runs on the client thread, which is the only thing that makes it
+	 * worth having: every failure mode that leaves a player stranded above
+	 * the build height is one where the server thread stopped answering -
+	 * a blocking region-file read that never returns, a step that wedges
+	 * inside vanilla, a server thread busy elsewhere. A watchdog scheduled
+	 * onto that same thread would be stuck in the queue behind the thing
+	 * it was meant to rescue you from.
+	 *
+	 * "Moving" is any change to the counters, the phase, or the unload
+	 * wait clock. That last one matters: waiting for chunks to unload makes
+	 * no chunk progress by design, and it has its own bounded timeout, so
+	 * ticking waitTicks is what tells the watchdog the wait is a wait
+	 * rather than a hang.
+	 */
+	private void watchdog() {
+		// Mixed rather than bit-packed: packing needs a field-width budget that
+		// stops being true the moment a counter's range changes, and a false
+		// "no progress" here teleports someone out of a job that was fine.
+		long signature = phase.ordinal();
+		signature = signature * 31 + index;
+		signature = signature * 31 + succeeded;
+		signature = signature * 31 + skipped;
+		signature = signature * 31 + failed;
+		signature = signature * 31 + waitTicks;
+		if (signature != lastSignature) {
+			lastSignature = signature;
+			stallTicks = 0;
+			return;
+		}
+		stallTicks++;
+
+		if (!watchdogTripped && stallTicks > watchdogTicks) {
+			watchdogTripped = true;
+			Main.LOGGER.warn("[{}] Chunk job made no progress for {}s in phase {} - aborting and restoring the player",
+				Main.MOD_ID, watchdogTicks / 20, phase);
+			outcome = Outcome.WATCHDOG;
+			// Deliberately not going through pump()'s gate: a step that never
+			// returned is exactly what leaves that gate closed forever, and
+			// this task is the one thing that must still get queued.
+			server.execute(this::emergencyRestore);
+			return;
+		}
+
+		if (watchdogTripped && stallTicks > watchdogTicks + WATCHDOG_GRACE_TICKS) {
+			// The rescue didn't land either, so the server thread isn't coming
+			// back. Let go of the job rather than hold the screen hostage to it.
+			forceAbandon();
+		}
+	}
+
+	/** Finish the chunk in flight, then stop. */
 	public void requestCancel() {
 		cancelRequested = true;
+		if (outcome == Outcome.COMPLETED) outcome = Outcome.CANCELLED;
+	}
+
+	/**
+	 * Stop now and put the player back, without waiting for the current step
+	 * to reach a tidy boundary. For when the clean path is itself what's
+	 * stuck - the ordinary Cancel only takes effect at the top of a step,
+	 * which is no help if a step is what stopped returning.
+	 */
+	public void forceCancel() {
+		cancelRequested = true;
+		forceCancelRequested = true;
+		outcome = Outcome.FORCE_CANCELLED;
+		server.execute(this::emergencyRestore);
+	}
+
+	/**
+	 * Give up on the server thread answering and mark the job finished from
+	 * here, so the screen can be closed.
+	 *
+	 * This is the last resort and it is not clean: if the player was staged
+	 * and the restore never ran, they are still above the build height with
+	 * gravity off. The queued restore stays queued, so a server thread that
+	 * recovers will still put them back; {@link #playerMayBeStranded()} is
+	 * what the screen uses to warn that it might not.
+	 */
+	public void forceAbandon() {
+		if (phase == Phase.FINISHED) return;
+		outcome = Outcome.ABANDONED;
+		Main.LOGGER.error("[{}] Chunk job abandoned: the server thread stopped responding. "
+			+ "Player staged: {}", Main.MOD_ID, staged);
+		// One more attempt, in case the thread frees up after we let go.
+		server.execute(this::emergencyRestore);
+		phase = Phase.FINISHED;
+		ACTIVE.remove(server, this);
+	}
+
+	/**
+	 * Everything the tail of a job has to do, in one place, callable out of
+	 * order: put the player back, hand back any force-load tickets we took,
+	 * count whatever never ran as failed, and finish.
+	 */
+	private void emergencyRestore() {
+		try {
+			failed += Math.max(0, targets.size() - index);
+			index = targets.size();
+			currentChunk = null;
+			restoreForceLoads();
+			returnPlayer();
+		} catch (Exception e) {
+			Main.LOGGER.error("[{}] Emergency restore failed", Main.MOD_ID, e);
+		} finally {
+			phase = Phase.FINISHED;
+			ACTIVE.remove(server, this);
+		}
+	}
+
+	/** Whether the player was left at the staging position by an abandoned job. */
+	public boolean playerMayBeStranded() {
+		return staged;
+	}
+
+	/**
+	 * Queues the restore again, for the screen to offer after an abandoned
+	 * job. Worth having as a button rather than an automatic retry: the
+	 * reason it didn't land the first time is a server thread that wasn't
+	 * answering, and whether it's answering now is something the person
+	 * looking at the game can judge and a timer can't.
+	 */
+	public void retryRestore() {
+		server.execute(this::emergencyRestore);
+	}
+
+	public Outcome outcome() {
+		return outcome;
+	}
+
+	public boolean isForceCancelling() {
+		return forceCancelRequested;
+	}
+
+	/** Targets that were still in memory when the unload wait ran out. */
+	public int stubbornChunks() {
+		return stubbornChunks;
 	}
 
 	public Mode mode() {
@@ -212,6 +402,13 @@ public final class ChunkRegenJob {
 	}
 
 	private void step() {
+		// A force cancel or an abandon can land while this step was still in
+		// the server's queue. Either way the job is over and this step has
+		// nothing left to do to a world it no longer owns.
+		if (phase == Phase.FINISHED) {
+			stepQueued.set(false);
+			return;
+		}
 		try {
 			switch (phase) {
 				case MOVING_PLAYER -> stepMovePlayer();
@@ -279,18 +476,77 @@ public final class ChunkRegenJob {
 			return;
 		}
 		waitTicks++;
-		boolean allClear = true;
+
+		List<ChunkPos> stillLoaded = new ArrayList<>();
 		for (ChunkPos pos : targets) {
 			if (ChunkRegenService.isLoaded(level, pos)) {
-				allClear = false;
-				break;
+				stillLoaded.add(pos);
 			}
 		}
-		if (allClear || waitTicks > UNLOAD_TIMEOUT_TICKS) {
-			// On timeout we don't force anything: whatever is still loaded
-			// gets reported as skipped by the work phase below.
+		if (stillLoaded.isEmpty()) {
+			stubbornChunks = 0;
 			phase = Phase.WORKING;
+			return;
 		}
+		if (waitTicks <= unloadTimeoutTicks) return;
+
+		stubbornChunks = stillLoaded.size();
+		if (!forceLoadRoundDone && releaseForceLoads(stillLoaded)) {
+			// A force-load ticket is the one reason a chunk won't unload that
+			// we can actually do something about, and doing it is reversible:
+			// the ticket goes back on at the end of the job either way, and a
+			// chunk we're about to regenerate doesn't care that it spent a few
+			// seconds not force-loaded. Reset the clock and give them a second
+			// round to actually leave memory.
+			forceLoadRoundDone = true;
+			waitTicks = 0;
+			return;
+		}
+		// Nothing left to try. We still don't force anything out of memory by
+		// hand - a loaded chunk writes itself back over the edit, so forcing
+		// it would produce a silently half-regenerated chunk rather than an
+		// honest skip. The work phase reports these as skipped.
+		forceLoadRoundDone = true;
+		phase = Phase.WORKING;
+	}
+
+	/**
+	 * Drops the force-load ticket on any of these chunks that has one.
+	 * Returns true if it dropped at least one, meaning another unload round
+	 * is worth waiting out.
+	 */
+	private boolean releaseForceLoads(List<ChunkPos> candidates) {
+		//? if >=26 {
+		/*it.unimi.dsi.fastutil.longs.LongSet forced = level.getForceLoadedChunks();
+		*///?} else {
+		it.unimi.dsi.fastutil.longs.LongSet forced = level.getForcedChunks();
+		//?}
+		if (forced.isEmpty()) return false;
+
+		for (ChunkPos pos : candidates) {
+			if (!forced.contains(packed(pos))) continue;
+			level.setChunkForced(chunkX(pos), chunkZ(pos), false);
+			releasedForceLoads.add(pos);
+		}
+		releasedTickets = releasedForceLoads.size();
+		if (!releasedForceLoads.isEmpty()) {
+			Main.LOGGER.info("[{}] Released {} force-load ticket(s) so the chunks could unload; "
+				+ "they go back on when the job ends", Main.MOD_ID, releasedForceLoads.size());
+		}
+		return !releasedForceLoads.isEmpty();
+	}
+
+	/** Hands back every ticket {@link #releaseForceLoads} took, whatever happened since. */
+	private void restoreForceLoads() {
+		if (releasedForceLoads.isEmpty()) return;
+		for (ChunkPos pos : releasedForceLoads) {
+			try {
+				level.setChunkForced(chunkX(pos), chunkZ(pos), true);
+			} catch (Exception e) {
+				Main.LOGGER.error("[{}] Could not restore the force-load ticket on {}", Main.MOD_ID, pos, e);
+			}
+		}
+		releasedForceLoads.clear();
 	}
 
 	private void stepWork() {
@@ -298,6 +554,9 @@ public final class ChunkRegenJob {
 			skipAllRemaining();
 		}
 		for (int i = 0; i < CHUNKS_PER_STEP && index < targets.size(); i++) {
+			// Checked inside the batch, not just at the top: a force cancel
+			// arriving mid-batch shouldn't buy three more chunks first.
+			if (forceCancelRequested) break;
 			ChunkPos pos = targets.get(index);
 			currentChunk = pos;
 			apply(pos);
@@ -357,19 +616,37 @@ public final class ChunkRegenJob {
 	}
 
 	private void stepReturnPlayer() {
-		ServerPlayer player = player();
-		if (player != null && staged) {
-			// No flush/wait needed before pulling the player back: chunk
-			// loads and our writes both go through the level's single IO
-			// worker in submission order, so the reload that follows this
-			// teleport can't overtake the write that queued before it.
-			teleport(player, returnX, returnY, returnZ, returnYRot, returnXRot);
-			setInvulnerable(player, wasInvulnerable);
-			player.setNoGravity(wasNoGravity);
-			player.resetFallDistance();
-		}
-		staged = false;
+		restoreForceLoads();
+		returnPlayer();
 		finish();
+	}
+
+	/**
+	 * Puts the player back where they were, and clears {@link #staged} only
+	 * once that has actually happened - so an abandoned job can tell the
+	 * difference between "restored" and "still up there".
+	 */
+	private void returnPlayer() {
+		if (!staged) return;
+		ServerPlayer player = player();
+		if (player == null) {
+			// Logged out mid-job. Their saved position is whatever it was when
+			// they disconnected, which is the staging spot, and we can't fix
+			// that from here - but the flags we set went with them, so this is
+			// worth saying out loud rather than swallowing.
+			Main.LOGGER.warn("[{}] Player left during a chunk job; they will log back in "
+				+ "at the staging position with gravity and damage off", Main.MOD_ID);
+			return;
+		}
+		// No flush/wait needed before pulling the player back: chunk
+		// loads and our writes both go through the level's single IO
+		// worker in submission order, so the reload that follows this
+		// teleport can't overtake the write that queued before it.
+		teleport(player, returnX, returnY, returnZ, returnYRot, returnXRot);
+		setInvulnerable(player, wasInvulnerable);
+		player.setNoGravity(wasNoGravity);
+		player.resetFallDistance();
+		staged = false;
 	}
 
 	private void skipAllRemaining() {
@@ -379,6 +656,10 @@ public final class ChunkRegenJob {
 	}
 
 	private void finish() {
+		// Idempotent: the list is cleared as it's handed back, so the paths
+		// that already restored and the ones that threw before getting there
+		// can both come through here.
+		restoreForceLoads();
 		phase = Phase.FINISHED;
 		ACTIVE.remove(server, this);
 	}
@@ -462,7 +743,9 @@ public final class ChunkRegenJob {
 	public Component statusLine() {
 		return switch (phase) {
 			case MOVING_PLAYER -> Component.translatable("gui.retrograde.job.phase.moving");
-			case WAITING_FOR_UNLOAD -> Component.translatable("gui.retrograde.job.phase.unloading", waitSeconds());
+			case WAITING_FOR_UNLOAD -> releasedTickets > 0
+				? Component.translatable("gui.retrograde.job.phase.unloading_released", releasedTickets, waitSeconds())
+				: Component.translatable("gui.retrograde.job.phase.unloading", waitSeconds());
 			case WORKING -> {
 				ChunkPos pos = currentChunk;
 				yield pos == null
@@ -470,9 +753,15 @@ public final class ChunkRegenJob {
 					: Component.translatable("gui.retrograde.job.phase.working_chunk", chunkX(pos), chunkZ(pos));
 			}
 			case RETURNING_PLAYER -> Component.translatable("gui.retrograde.job.phase.returning");
-			case FINISHED -> cancelRequested
-				? Component.translatable("gui.retrograde.job.phase.cancelled")
-				: Component.translatable("gui.retrograde.job.phase.done");
+			case FINISHED -> switch (outcome) {
+				case CANCELLED -> Component.translatable("gui.retrograde.job.phase.cancelled");
+				case FORCE_CANCELLED -> Component.translatable("gui.retrograde.job.phase.force_cancelled");
+				case WATCHDOG -> Component.translatable("gui.retrograde.job.phase.watchdog", watchdogTicks / 20);
+				case ABANDONED -> Component.translatable("gui.retrograde.job.phase.abandoned");
+				case COMPLETED -> stubbornChunks > 0
+					? Component.translatable("gui.retrograde.job.phase.done_stubborn", stubbornChunks)
+					: Component.translatable("gui.retrograde.job.phase.done");
+			};
 		};
 	}
 
@@ -496,6 +785,15 @@ public final class ChunkRegenJob {
 		/*return ChunkPos.containing(player.blockPosition());
 		*///?} else {
 		return new ChunkPos(player.blockPosition());
+		//?}
+	}
+
+	/** 26.x renamed ChunkPos#toLong to #pack; the packing itself is unchanged. */
+	private static long packed(ChunkPos pos) {
+		//? if >=26 {
+		/*return pos.pack();
+		*///?} else {
+		return pos.toLong();
 		//?}
 	}
 

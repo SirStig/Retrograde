@@ -102,3 +102,24 @@
   fillbiome, against a permission-4 command source so it works in a world
   without cheats enabled. Blocks don't move - only fog, grass colour,
   weather and mob spawns change
+- Progress screen backdrop is now opaque by default (settings toggle), so a
+  regen's teleport out and back isn't visible behind it and read as a crash
+- Cancel is now a ladder: Cancel stops at the next clean chunk boundary,
+  pressing it again force-cancels and restores you immediately, and Leave
+  anyway appears if even that doesn't land within three seconds. Escape
+  climbs the same ladder. The old behaviour greyed the only button out
+  while cancelling, which left nothing to press if the thing being
+  cancelled was itself what had stopped responding
+- Added a watchdog that aborts a job and puts the player back when nothing
+  has moved for the configured interval. It runs on the client tick on
+  purpose: the failure modes that strand a player are ones where the server
+  thread stopped answering, so a server-thread watchdog would queue behind
+  the hang it exists to rescue you from. If its restore doesn't land
+  either, the screen says the player may still be staged and offers to
+  retry, rather than reporting a clean finish
+- The unload and watchdog timeouts now come from settings instead of being
+  hardcoded at 30s and nothing
+- A chunk that won't unload because it's force-loaded now gets its ticket
+  dropped for the duration and handed back when the job ends, however it
+  ends. Anything still loaded after that is still reported as skipped and
+  never forced - forcing it would write a silently half-regenerated chunk
