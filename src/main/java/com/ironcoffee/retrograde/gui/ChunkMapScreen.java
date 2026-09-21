@@ -2,6 +2,7 @@ package com.ironcoffee.retrograde.gui;
 
 import com.ironcoffee.retrograde.chunk.ChunkResourceInfo;
 import com.ironcoffee.retrograde.chunk.ChunkTracker;
+import com.ironcoffee.retrograde.config.RetrogradeConfig;
 import com.ironcoffee.retrograde.regen.ChunkRegenJob;
 import com.ironcoffee.retrograde.regen.ChunkRegenService;
 import com.ironcoffee.retrograde.retrogen.RetrogenIntegration;
@@ -123,32 +124,53 @@ public class ChunkMapScreen extends Screen {
 	/** How far one arrow-key press slides the map, in screen pixels. */
 	private static final int KEY_PAN_PIXELS = 48;
 
+	/**
+	 * Panel sizes are preferences, not promises. Everything below is what a
+	 * panel gets when there's room; init() shrinks them toward the MIN_
+	 * values, and drops rows, when there isn't.
+	 *
+	 * The reason this is not a set of fixed constants any more: at 1366x768
+	 * with GUI scale 3 the window is 455x256 effective pixels, and the old
+	 * fixed layout wanted 253 of those 256 rows for the left column alone,
+	 * plus 342 of 455 columns once the filter was open. The map - the thing
+	 * the screen is for - was down to a 113px strip, and at scale 4 the
+	 * panels ran off the bottom outright.
+	 */
 	private static final int PANEL_WIDTH = 152;
+	private static final int MIN_PANEL_WIDTH = 104;
 	private static final int PANEL_PAD = 6;
 	private static final int LINE_H = 10;
 	private static final int ORE_ROW_H = 18;
 	private static final int ORE_ICON = 16;
 	private static final int ORE_COLUMNS = 3;
 	private static final int ORE_ROWS = 2;
-	private static final int MAX_PANEL_ORES = ORE_COLUMNS * ORE_ROWS;
 	private static final int ORE_TOGGLE_W = 13;
 	private static final int ORE_TOGGLE_H = 11;
-	/** Wider than the info panel: this one spells each ore's name out. */
-	private static final int ORE_PANEL_WIDTH = 168;
 	private static final int ORE_PANEL_GAP = 6;
 	private static final int ACTION_BUTTON_H = 18;
 	private static final int ACTION_BUTTON_GAP = 4;
-	private static final int ACTION_BUTTONS = 4;
+	/** Chunk Manipulation on its own row, then Find and Clear sharing one. */
+	private static final int ACTION_ROWS = 2;
 
 	/**
-	 * The filter panel shares the slot to the right of the info panel with
-	 * the ore breakdown, so only one of the two is ever open - two floating
-	 * panels stacked on the same pixels would be unreadable, and both of
-	 * them are about the same thing anyway.
+	 * The filter panel and the ore breakdown share one slot, so only one of
+	 * the two is ever open - two floating panels stacked on the same pixels
+	 * would be unreadable, and both of them are about the same thing anyway.
+	 * Where that slot is depends on the window: beside the info panel when
+	 * there's room, otherwise pinned to the right edge under the icon
+	 * cluster, otherwise on top of the left column.
 	 */
 	private static final int FILTER_PANEL_WIDTH = 176;
+	private static final int MIN_SIDE_PANEL_WIDTH = 116;
 	private static final int FILTER_ROW_H = 18;
 	private static final int FILTER_ROW_GAP = 3;
+
+	/**
+	 * Most of the window has to stay map. Chrome past this fraction of the
+	 * width pushes the secondary panel off the left column and onto the
+	 * right edge instead of letting it keep eating the middle.
+	 */
+	private static final float MAX_CHROME_FRACTION = 0.55f;
 	/** How often the filter re-runs and re-derives its biome/ore choices, in ms. */
 	private static final long FILTER_REFRESH_MS = 400;
 
@@ -180,6 +202,11 @@ public class ChunkMapScreen extends Screen {
 	private static final int COLOR_NOTICE = 0xFFD8B24C;
 	// Amber rather than another blue: filter matches sit on the same map as
 	// the blue selection, and "found" and "selected" are different answers.
+	// Slime green, and deliberately weaker than the selection and match
+	// tints: it's a permanent property of the coordinates, on screen the
+	// whole time, so it has to sit behind anything you're actively doing.
+	private static final int COLOR_SLIME_TINT = 0x4544AA44;
+	private static final int COLOR_SLIME_EDGE = 0x8055CC55;
 	private static final int COLOR_MATCH_TINT = 0x55D8A03C;
 	private static final int COLOR_MATCH_EDGE = 0xFFF0C060;
 
@@ -229,7 +256,22 @@ public class ChunkMapScreen extends Screen {
 	private int titleX, titleY, titleW, titleH;
 	private int hintX, hintY, hintW, hintH;
 	private int panelX, infoPanelY, infoPanelH, actionPanelY, actionPanelH;
-	private int oreListX, oreListY, oreListH;
+	private int oreListY, oreListH;
+
+	// ----- responsive layout, all resolved in init() -----
+
+	/** Actual width of the info and action panels this frame. */
+	private int panelW = PANEL_WIDTH;
+	/** Actual width of whichever secondary panel is open. */
+	private int sidePanelW = FILTER_PANEL_WIDTH;
+	/** Top-left of the secondary panel slot, wherever it ended up fitting. */
+	private int sidePanelX, sidePanelY;
+	/** Rows of the info panel's ore icon grid: 2 normally, 1 when short. */
+	private int oreRows = ORE_ROWS;
+	/** How many ores the icon grid has room for, {@link #oreRows} dependent. */
+	private int maxPanelOres = ORE_COLUMNS * ORE_ROWS;
+	/** True when the secondary panel had to be laid over the left column. */
+	private boolean sidePanelOverlaps;
 
 	/** Whether the full ore breakdown is pinned open beside the info panel. */
 	private boolean oreListOpen;
@@ -259,9 +301,7 @@ public class ChunkMapScreen extends Screen {
 	private Set<ChunkPos> matches = Set.of();
 	private long filterRefreshedAt;
 
-	private Button regenButton;
-	private Button undoButton;
-	private Button retrogenButton;
+	private Button manipulateButton;
 	private Button clearButton;
 	private Button findButton;
 	private Button oreToggle;
@@ -288,7 +328,7 @@ public class ChunkMapScreen extends Screen {
 			recenterOnPlayer();
 		}
 
-		clusterW = ICON_SIZE * 4 + ICON_GAP * 3;
+		clusterW = ICON_SIZE * 5 + ICON_GAP * 4;
 		clusterH = ICON_SIZE;
 		clusterX = width - CHIP_MARGIN - clusterW;
 		clusterY = CHIP_MARGIN;
@@ -304,6 +344,10 @@ public class ChunkMapScreen extends Screen {
 		x += ICON_SIZE + ICON_GAP;
 		addRenderableWidget(Button.builder(Component.literal("R"), b -> recenterOnPlayer())
 			.tooltip(Tooltip.create(Component.translatable("gui.retrograde.chunk_map.recenter")))
+			.bounds(x, clusterY, ICON_SIZE, ICON_SIZE).build());
+		x += ICON_SIZE + ICON_GAP;
+		addRenderableWidget(Button.builder(Component.literal("⚙"), b -> openSettings())
+			.tooltip(Tooltip.create(Component.translatable("gui.retrograde.chunk_map.settings")))
 			.bounds(x, clusterY, ICON_SIZE, ICON_SIZE).build());
 		x += ICON_SIZE + ICON_GAP;
 		addRenderableWidget(Button.builder(Component.literal("X"), b -> onClose())
@@ -328,37 +372,50 @@ public class ChunkMapScreen extends Screen {
 		hintX = (width - hintW) / 2;
 		hintY = height - CHIP_MARGIN - hintH;
 
+		// Panels take their preferred width only while that leaves the map the
+		// bulk of the window; below that they shrink, and they never go under
+		// MIN_PANEL_WIDTH because a narrower one can't hold a biome name.
+		panelW = Math.max(MIN_PANEL_WIDTH, Math.min(PANEL_WIDTH, Math.round(width * 0.30f)));
+		panelW = Math.min(panelW, Math.max(1, width - CHIP_MARGIN * 2));
 		panelX = CHIP_MARGIN;
 		infoPanelY = CHIP_MARGIN;
-		infoPanelH = PANEL_PAD * 2 + LINE_H * 4 + 5 + ORE_ROW_H * ORE_ROWS;
-		actionPanelY = infoPanelY + infoPanelH + 6;
+
 		actionPanelH = PANEL_PAD * 2 + LINE_H * 2 + 4
-			+ ACTION_BUTTONS * ACTION_BUTTON_H + (ACTION_BUTTONS - 1) * ACTION_BUTTON_GAP;
+			+ ACTION_ROWS * ACTION_BUTTON_H + (ACTION_ROWS - 1) * ACTION_BUTTON_GAP;
+
+		// Everything from the top margin down to the controls hint is the
+		// column's budget. When it doesn't fit, the ore icon grid is what
+		// gives - the same ores are still one click away in the breakdown
+		// panel, whereas a clipped action panel means unreachable buttons.
+		int columnBudget = hintY - infoPanelY - 4;
+		oreRows = ORE_ROWS;
+		while (oreRows > 0 && infoPanelHeight(oreRows) + 6 + actionPanelH > columnBudget) {
+			oreRows--;
+		}
+		maxPanelOres = ORE_COLUMNS * oreRows;
+		infoPanelH = infoPanelHeight(oreRows);
+		actionPanelY = infoPanelY + infoPanelH + 6;
 
 		// Sits on the ore heading row, right-aligned inside the info panel.
 		oreToggle = addRenderableWidget(Button.builder(Component.literal(oreListOpen ? "«" : "»"), b -> toggleOreList())
 			.tooltip(Tooltip.create(Component.translatable("gui.retrograde.chunk_map.panel.ores.tip")))
-			.bounds(panelX + PANEL_WIDTH - PANEL_PAD - ORE_TOGGLE_W,
+			.bounds(panelX + panelW - PANEL_PAD - ORE_TOGGLE_W,
 				infoPanelY + PANEL_PAD + LINE_H * 3 + 4, ORE_TOGGLE_W, ORE_TOGGLE_H)
 			.build());
 
-		oreListX = panelX + PANEL_WIDTH + ORE_PANEL_GAP;
-		oreListY = infoPanelY;
+		layOutSidePanelSlot();
+		oreListY = sidePanelY;
 		oreListH = 0;
 
 		int buttonX = panelX + PANEL_PAD;
-		int buttonW = PANEL_WIDTH - PANEL_PAD * 2;
+		int buttonW = panelW - PANEL_PAD * 2;
 		int buttonY = actionPanelY + PANEL_PAD + LINE_H * 2 + 4;
-		regenButton = addActionButton(buttonX, buttonY, buttonW, "gui.retrograde.chunk_map.action.regen",
-			"gui.retrograde.chunk_map.action.regen.tip", b -> beginRegen());
-		buttonY += ACTION_BUTTON_H + ACTION_BUTTON_GAP;
-		undoButton = addActionButton(buttonX, buttonY, buttonW, "gui.retrograde.chunk_map.action.undo",
-			"gui.retrograde.chunk_map.action.undo.tip", b -> beginUndo());
-		buttonY += ACTION_BUTTON_H + ACTION_BUTTON_GAP;
-		retrogenButton = addActionButton(buttonX, buttonY, buttonW, "gui.retrograde.chunk_map.action.retrogen",
-			"gui.retrograde.chunk_map.action.retrogen.tip", b -> beginRetrogen());
-		// Find and Clear share the last row at half width each, so adding the
-		// filter doesn't push the action panel taller than a 240px window.
+		// One entry point for everything that changes a chunk, rather than a
+		// stack of verbs on the map: it keeps this panel two rows tall, and
+		// the operations that need explaining get a screen with room to.
+		manipulateButton = addActionButton(buttonX, buttonY, buttonW,
+			"gui.retrograde.chunk_map.action.manipulate",
+			"gui.retrograde.chunk_map.action.manipulate.tip", b -> openManipulation());
 		buttonY += ACTION_BUTTON_H + ACTION_BUTTON_GAP;
 		int halfW = (buttonW - ACTION_BUTTON_GAP) / 2;
 		findButton = addActionButton(buttonX, buttonY, halfW, "gui.retrograde.chunk_map.action.find",
@@ -371,6 +428,49 @@ public class ChunkMapScreen extends Screen {
 		refreshSelectionStats();
 	}
 
+	/** Coordinates, status, biome, divider, ore heading, then {@code rows} of icons. */
+	private int infoPanelHeight(int rows) {
+		return PANEL_PAD * 2 + LINE_H * 4 + 5 + ORE_ROW_H * rows;
+	}
+
+	/**
+	 * Decides where the ore breakdown and the filter get to live, in order of
+	 * preference:
+	 *
+	 * <ol>
+	 *   <li>Beside the info panel, while the two together stay inside
+	 *       {@link #MAX_CHROME_FRACTION} of the window.</li>
+	 *   <li>Pinned to the right edge under the icon cluster. Costs the same
+	 *       pixels but takes them off the edge instead of out of the middle,
+	 *       so what's left of the map is one usable area rather than a
+	 *       gutter.</li>
+	 *   <li>Over the left column, when the window is too narrow for both at
+	 *       any placement. The secondary panel wins because it's only there
+	 *       while you asked for it.</li>
+	 * </ol>
+	 */
+	private void layOutSidePanelSlot() {
+		sidePanelW = Math.min(FILTER_PANEL_WIDTH,
+			Math.max(MIN_SIDE_PANEL_WIDTH, Math.round(width * 0.34f)));
+		sidePanelW = Math.min(sidePanelW, Math.max(1, width - CHIP_MARGIN * 2));
+
+		int beside = panelX + panelW + ORE_PANEL_GAP;
+		int rightEdge = width - CHIP_MARGIN - sidePanelW;
+		sidePanelOverlaps = false;
+
+		if (beside + sidePanelW <= width * MAX_CHROME_FRACTION) {
+			sidePanelX = beside;
+			sidePanelY = infoPanelY;
+		} else if (rightEdge >= beside) {
+			sidePanelX = rightEdge;
+			sidePanelY = clusterY + clusterH + ORE_PANEL_GAP;
+		} else {
+			sidePanelX = panelX;
+			sidePanelY = infoPanelY;
+			sidePanelOverlaps = true;
+		}
+	}
+
 	/**
 	 * The filter's controls are real widgets rather than hand-drawn hit
 	 * boxes, so they get vanilla's hover and click feedback for free - but
@@ -378,9 +478,9 @@ public class ChunkMapScreen extends Screen {
 	 * hidden when it isn't.
 	 */
 	private void initFilterPanel() {
-		filterX = panelX + PANEL_WIDTH + ORE_PANEL_GAP;
-		filterY = infoPanelY;
-		int rowW = FILTER_PANEL_WIDTH - PANEL_PAD * 2;
+		filterX = sidePanelX;
+		filterY = sidePanelY;
+		int rowW = sidePanelW - PANEL_PAD * 2;
 		int rowX = filterX + PANEL_PAD;
 		int y = filterY + PANEL_PAD + LINE_H + 2;
 
@@ -474,17 +574,25 @@ public class ChunkMapScreen extends Screen {
 	private void syncActionButtons() {
 		int count = selection.size();
 		boolean any = count > 0;
-		regenButton.setMessage(Component.translatable("gui.retrograde.chunk_map.action.regen", count));
-		undoButton.setMessage(Component.translatable("gui.retrograde.chunk_map.action.undo", selectedUndoCount));
-		retrogenButton.setMessage(Component.translatable("gui.retrograde.chunk_map.action.retrogen", count));
+		manipulateButton.setMessage(Component.translatable("gui.retrograde.chunk_map.action.manipulate", count));
 		clearButton.setMessage(Component.translatable("gui.retrograde.chunk_map.action.clear"));
 		findButton.setMessage(Component.translatable(filterOpen
 			? "gui.retrograde.chunk_map.action.find.close"
 			: "gui.retrograde.chunk_map.action.find"));
-		regenButton.active = any;
-		undoButton.active = selectedUndoCount > 0;
-		retrogenButton.active = any;
+		manipulateButton.active = any;
 		clearButton.active = any;
+
+		// When the window was too narrow to give the secondary panel its own
+		// column it sits on top of this one, so the buttons underneath have to
+		// stop taking clicks meant for the panel covering them.
+		boolean buried = sidePanelOverlaps && (filterOpen || oreListOpen);
+		manipulateButton.visible = !buried;
+		clearButton.visible = !buried;
+		findButton.visible = !buried;
+		// The ore toggle stays, and stays on top, even when the breakdown is
+		// covering the panel it normally lives on: it is the only way to put
+		// that panel away again, where the filter has its own Close button.
+		oreToggle.visible = true;
 	}
 
 	private void recenterOnPlayer() {
@@ -545,12 +653,12 @@ public class ChunkMapScreen extends Screen {
 		if (isOverChip(mouseX, mouseY, clusterX, clusterY, clusterW, clusterH)) return false;
 		if (isOverChip(mouseX, mouseY, hintX, hintY, hintW, hintH)) return false;
 		int columnH = actionPanelY + actionPanelH - infoPanelY;
-		if (isOverChip(mouseX, mouseY, panelX, infoPanelY, PANEL_WIDTH, columnH)) return false;
+		if (isOverChip(mouseX, mouseY, panelX, infoPanelY, panelW, columnH)) return false;
 		// The expanded ore list floats over the map, and it describes whichever
 		// chunk is in focus - so hovering it must not change what's in focus,
 		// or the list would rewrite itself out from under the cursor.
-		if (oreListOpen && isOverChip(mouseX, mouseY, oreListX, oreListY, ORE_PANEL_WIDTH, oreListH)) return false;
-		if (filterOpen && isOverChip(mouseX, mouseY, filterX, filterY, FILTER_PANEL_WIDTH, filterH)) return false;
+		if (oreListOpen && isOverChip(mouseX, mouseY, sidePanelX, oreListY, sidePanelW, oreListH)) return false;
+		if (filterOpen && isOverChip(mouseX, mouseY, filterX, filterY, sidePanelW, filterH)) return false;
 		return true;
 	}
 
@@ -632,6 +740,10 @@ public class ChunkMapScreen extends Screen {
 		if (serverLevel == null) return;
 		ChunkTracker tracker = ChunkTracker.forServer(server);
 		ChunkPos playerChunk = playerChunk(player);
+		// Read once per frame rather than per chunk: both are constant for
+		// the whole draw, and there can be a few hundred chunks on screen.
+		boolean slimeChunks = RetrogradeConfig.showSlimeChunks() && isOverworld(dimension);
+		long worldSeed = serverLevel.getSeed();
 
 		for (VisibleChunk chunk : computeVisibleChunks()) {
 			dataCache.request(minecraft, server, serverLevel, chunk.pos());
@@ -653,6 +765,16 @@ public class ChunkMapScreen extends Screen {
 				painter.fill(x1, y1, x2, y2, COLOR_PLAYER_TINT);
 			} else if (tracker.statusOf(dimension, chunk.pos()) == ChunkTracker.Status.TOUCHED) {
 				painter.fill(x1, y1, x2, y2, COLOR_TOUCHED_TINT);
+			}
+
+			// Under the grid lines and everything interactive, because this is
+			// a property of the coordinates rather than anything you did or
+			// selected - it should read as part of the terrain, not as state.
+			if (slimeChunks && isSlimeChunk(worldSeed, chunk.pos())) {
+				painter.fill(x1, y1, x2, y2, COLOR_SLIME_TINT);
+				if (chunk.size() >= CHUNK_BLOCKS) {
+					painter.outline(x1, y1, chunk.size(), chunk.size(), COLOR_SLIME_EDGE);
+				}
 			}
 
 			if (chunk.size() >= CHUNK_BLOCKS) {
@@ -714,7 +836,7 @@ public class ChunkMapScreen extends Screen {
 	 */
 	private void drawInfoPanel(Painter painter, MinecraftServer server, ResourceKey<Level> dimension,
 			ChunkTracker tracker, ChunkPos playerChunk) {
-		drawChip(painter, panelX, infoPanelY, PANEL_WIDTH, infoPanelH);
+		drawChip(painter, panelX, infoPanelY, panelW, infoPanelH);
 		// Recomputed below if the list actually gets drawn this frame; zeroed
 		// here so a chunk with no ore data leaves no phantom hit-box behind.
 		oreListH = 0;
@@ -732,7 +854,7 @@ public class ChunkMapScreen extends Screen {
 		painter.text(font, "(" + chunkX(pos) + ", " + chunkZ(pos) + ")", textX, y, 0xFFFFFFFF);
 		if (selection.contains(pos)) {
 			Component tag = Component.translatable("gui.retrograde.chunk_map.panel.selected");
-			painter.text(font, tag, panelX + PANEL_WIDTH - PANEL_PAD - font.width(tag), y, COLOR_SELECTED_EDGE);
+			painter.text(font, tag, panelX + panelW - PANEL_PAD - font.width(tag), y, COLOR_SELECTED_EDGE);
 		}
 		y += LINE_H;
 
@@ -747,6 +869,15 @@ public class ChunkMapScreen extends Screen {
 			: (status == ChunkTracker.Status.TOUCHED ? COLOR_STATUS_TOUCHED : COLOR_STATUS_UNTOUCHED);
 		painter.fill(textX, y + 2, textX + 4, y + 6, statusColor);
 		painter.text(font, Component.translatable(statusKey), textX + 8, y, statusColor);
+		// Right-aligned on the status row rather than a row of its own: the
+		// panel's height is already what decides whether the ore grid fits.
+		if (RetrogradeConfig.showSlimeChunks() && isOverworld(dimension)) {
+			ServerLevel slimeLevel = server.getLevel(dimension);
+			if (slimeLevel != null && isSlimeChunk(slimeLevel.getSeed(), pos)) {
+				Component tag = Component.translatable("gui.retrograde.chunk_map.panel.slime");
+				painter.text(font, tag, panelX + panelW - PANEL_PAD - font.width(tag), y, COLOR_SLIME_EDGE | 0xFF000000);
+			}
+		}
 		y += LINE_H;
 
 		ChunkResourceInfo.Inspection inspection = dataCache.inspectionOf(pos);
@@ -759,7 +890,7 @@ public class ChunkMapScreen extends Screen {
 		}
 		y += LINE_H;
 
-		painter.fill(textX, y + 1, panelX + PANEL_WIDTH - PANEL_PAD, y + 2, COLOR_DIVIDER);
+		painter.fill(textX, y + 1, panelX + panelW - PANEL_PAD, y + 2, COLOR_DIVIDER);
 		y += 5;
 
 		List<ChunkResourceInfo.Entry> ores = inspection == null ? null : inspection.ores();
@@ -775,15 +906,23 @@ public class ChunkMapScreen extends Screen {
 			return;
 		}
 
+		// Too short a window for even one row of icons. The heading above
+		// already carries the count, and the breakdown toggle beside it still
+		// opens the full list, so there's nothing left to say here.
+		if (oreRows <= 0) {
+			if (oreListOpen) drawOreListPanel(painter, ores);
+			return;
+		}
+
 		// Ores as a compact icon grid rather than one labelled row each: the
 		// icon already says which ore it is, so the name was just width.
-		int cellWidth = (PANEL_WIDTH - PANEL_PAD * 2) / ORE_COLUMNS;
+		int cellWidth = (panelW - PANEL_PAD * 2) / ORE_COLUMNS;
 		// Entries come sorted by count, so when there are more than fit, the
 		// ones dropped are the rarest - and the last cell says how many, so
 		// the panel never quietly under-reports what's down there. The full
 		// list is one click away on the toggle beside the heading.
-		boolean overflow = ores.size() > MAX_PANEL_ORES;
-		int shown = overflow ? MAX_PANEL_ORES - 1 : ores.size();
+		boolean overflow = ores.size() > maxPanelOres;
+		int shown = overflow ? maxPanelOres - 1 : ores.size();
 		for (int i = 0; i < shown; i++) {
 			ChunkResourceInfo.Entry entry = ores.get(i);
 			int cellX = textX + (i % ORE_COLUMNS) * cellWidth;
@@ -816,9 +955,9 @@ public class ChunkMapScreen extends Screen {
 		int rows = clipped ? maxRows - 1 : ores.size();
 
 		oreListH = PANEL_PAD * 2 + LINE_H + (rows + (clipped ? 1 : 0)) * ORE_ROW_H;
-		drawChip(painter, oreListX, oreListY, ORE_PANEL_WIDTH, oreListH);
+		drawChip(painter, sidePanelX, oreListY, sidePanelW, oreListH);
 
-		int textX = oreListX + PANEL_PAD;
+		int textX = sidePanelX + PANEL_PAD;
 		int y = oreListY + PANEL_PAD;
 		painter.text(font, Component.translatable("gui.retrograde.chunk_map.panel.ore_list"), textX, y, COLOR_HEADING);
 		y += LINE_H;
@@ -828,7 +967,7 @@ public class ChunkMapScreen extends Screen {
 			ItemStack stack = new ItemStack(entry.block());
 			painter.item(stack, textX, y);
 			String count = String.valueOf(entry.count());
-			int countX = oreListX + ORE_PANEL_WIDTH - PANEL_PAD - font.width(count);
+			int countX = sidePanelX + sidePanelW - PANEL_PAD - font.width(count);
 			painter.text(font, count, countX, y + 4, 0xFFFFFFFF);
 			// Trim the name against where the count starts, not the panel edge,
 			// so a long modded ore name can't overwrite its own number.
@@ -1049,13 +1188,13 @@ public class ChunkMapScreen extends Screen {
 		ResourceLocation biome = choice(biomeChoices, filterBiomeIndex);
 		filterBiomeButton.setMessage(biome == null
 			? Component.translatable("gui.retrograde.chunk_map.filter.biome.any")
-			: Component.literal(trimTo(biomeDisplayName(biome), FILTER_PANEL_WIDTH - PANEL_PAD * 2 - 8)));
+			: Component.literal(trimTo(biomeDisplayName(biome), sidePanelW - PANEL_PAD * 2 - 8)));
 		filterBiomeButton.active = !biomeChoices.isEmpty();
 
 		Block ore = choice(oreChoices, filterOreIndex);
 		filterOreButton.setMessage(ore == null
 			? Component.translatable("gui.retrograde.chunk_map.filter.ore.any")
-			: Component.literal(trimTo(new ItemStack(ore).getHoverName().getString(), FILTER_PANEL_WIDTH - PANEL_PAD * 2 - 8)));
+			: Component.literal(trimTo(new ItemStack(ore).getHoverName().getString(), sidePanelW - PANEL_PAD * 2 - 8)));
 		filterOreButton.active = !oreChoices.isEmpty();
 
 		filterOreRuleButton.setMessage(Component.translatable("gui.retrograde.chunk_map.filter.ore_rule",
@@ -1072,7 +1211,7 @@ public class ChunkMapScreen extends Screen {
 	}
 
 	private void drawFilterPanel(Painter painter) {
-		drawChip(painter, filterX, filterY, FILTER_PANEL_WIDTH, filterH);
+		drawChip(painter, filterX, filterY, sidePanelW, filterH);
 		int textX = filterX + PANEL_PAD;
 		painter.text(font, Component.translatable("gui.retrograde.chunk_map.filter.title"),
 			textX, filterY + PANEL_PAD, COLOR_HEADING);
@@ -1115,7 +1254,7 @@ public class ChunkMapScreen extends Screen {
 
 	/** Fixed panel under the info panel: what's selected and what can be done to it. */
 	private void drawActionPanel(Painter painter) {
-		drawChip(painter, panelX, actionPanelY, PANEL_WIDTH, actionPanelH);
+		drawChip(painter, panelX, actionPanelY, panelW, actionPanelH);
 
 		int textX = panelX + PANEL_PAD;
 		int y = actionPanelY + PANEL_PAD;
@@ -1135,7 +1274,7 @@ public class ChunkMapScreen extends Screen {
 	}
 
 	private String trimToPanel(String text) {
-		return trimTo(text, PANEL_WIDTH - PANEL_PAD * 2);
+		return trimTo(text, panelW - PANEL_PAD * 2);
 	}
 
 	private String trimTo(String text, int budget) {
@@ -1267,6 +1406,136 @@ public class ChunkMapScreen extends Screen {
 
 	// ----- actions -----
 
+	/** The current selection, for a sub-screen deciding what it can offer. */
+	List<ChunkPos> selectionSnapshot() {
+		return List.copyOf(selection);
+	}
+
+	/** How many of the selection have an undo snapshot behind them. */
+	int undoableCount() {
+		return selectedUndoCount;
+	}
+
+	/**
+	 * Every operation that changes chunks lives behind this one button, so
+	 * the map keeps a two-row action panel however many operations there
+	 * end up being - and each one gets a screen with room to say what it
+	 * does before it does it.
+	 */
+	private void openManipulation() {
+		if (selection.isEmpty()) return;
+		openScreen(new ChunkManipulationScreen(this));
+	}
+
+	private void openSettings() {
+		openScreen(new RetrogradeSettingsScreen(this));
+	}
+
+	/**
+	 * Whether slimes can spawn underground in this chunk.
+	 *
+	 * Same call vanilla's own slime spawn rule makes - WorldgenRandom
+	 * #seedSlimeChunk with the 987234911 salt, then nextInt(10) == 0 - rather
+	 * than a reimplementation of the scramble, so it can't drift away from
+	 * what the game actually does. The method's signature is identical on
+	 * 26.1 and 26.3 (checked against the shipped classes), and 26.3 moving
+	 * the Slime entity itself into a cubemob package didn't touch it.
+	 *
+	 * Slime chunks only mean anything in the Overworld, hence the dimension
+	 * check at the call site: the same maths produces a perfectly convincing
+	 * and entirely meaningless pattern in the Nether.
+	 */
+	private static boolean isSlimeChunk(long worldSeed, ChunkPos pos) {
+		return net.minecraft.world.level.levelgen.WorldgenRandom
+			.seedSlimeChunk(chunkX(pos), chunkZ(pos), worldSeed, 987234911L)
+			.nextInt(10) == 0;
+	}
+
+	private static boolean isOverworld(ResourceKey<Level> dimension) {
+		return dimension == Level.OVERWORLD;
+	}
+
+	void beginBiomeEdit() {
+		if (selection.isEmpty()) return;
+		List<ResourceLocation> choices = registeredBiomes();
+		if (choices.isEmpty()) {
+			showNotice(Component.translatable("gui.retrograde.biome_edit.none").getString());
+			return;
+		}
+		openScreen(new BiomeEditScreen(this, List.copyOf(selection), choices));
+	}
+
+	/**
+	 * Every biome this world registered, not just the ones the map has seen,
+	 * so the picker can offer a biome you've never been to. Sorted by id, so
+	 * cycling through it is predictable rather than registry-order.
+	 */
+	private List<ResourceLocation> registeredBiomes() {
+		MinecraftServer server = minecraft == null ? null : minecraft.getSingleplayerServer();
+		if (server == null) return List.of();
+		List<ResourceLocation> ids = new ArrayList<>();
+		//? if >=26 {
+		/*server.registryAccess().lookupOrThrow(net.minecraft.core.registries.Registries.BIOME)
+			.keySet().forEach(ids::add);
+		*///?} else {
+		server.registryAccess().registryOrThrow(net.minecraft.core.registries.Registries.BIOME)
+			.keySet().forEach(ids::add);
+		//?}
+		ids.sort(Comparator.comparing(ResourceLocation::toString));
+		return List.copyOf(ids);
+	}
+
+	/**
+	 * Runs vanilla's fillbiome over each selected chunk, one command per
+	 * chunk, against a permission-4 source built from the server - so this
+	 * works in a world that doesn't have cheats on, gated by Retrograde's own
+	 * setting rather than the world's.
+	 *
+	 * Synchronous rather than a progress-screen job: fillbiome rewrites the
+	 * biome container of chunks already in memory, with no teleporting, no
+	 * waiting for an unload and no regeneration, so the whole selection is a
+	 * frame's work. The jobs that need the progress screen are the ones that
+	 * need you moved out of the way first.
+	 */
+	void applyBiomeEdit(List<ChunkPos> targets, ResourceLocation biome) {
+		MinecraftServer server = minecraft == null ? null : minecraft.getSingleplayerServer();
+		var player = minecraft == null ? null : minecraft.player;
+		if (server == null || player == null || targets.isEmpty()) return;
+
+		ServerLevel level = server.getLevel(player.level().dimension());
+		if (level == null) return;
+
+		//? if >=26 {
+		/*int minY = level.getMinY();
+		int maxY = level.getMaxY();
+		*///?} else {
+		int minY = level.getMinBuildHeight();
+		// Exclusive on 1.20.1, inclusive on 26.x, and fillbiome wants inclusive.
+		int maxY = level.getMaxBuildHeight() - 1;
+		//?}
+
+		// Onto the server thread: this is a client screen, and the command
+		// dispatcher is about to edit chunks the server owns.
+		server.execute(() -> {
+			var source = server.createCommandSourceStack().withSuppressedOutput();
+			for (ChunkPos pos : targets) {
+				int x = chunkX(pos) * CHUNK_BLOCKS;
+				int z = chunkZ(pos) * CHUNK_BLOCKS;
+				server.getCommands().performPrefixedCommand(source, String.format(
+					"fillbiome %d %d %d %d %d %d %s",
+					x, minY, z, x + CHUNK_BLOCKS - 1, maxY, z + CHUNK_BLOCKS - 1, biome));
+			}
+		});
+
+		// Each cached chunk carries the biome it was read with, so everything
+		// just rewritten is now stale on the map and in the filter.
+		for (ChunkPos pos : targets) {
+			dataCache.invalidate(minecraft, pos);
+		}
+		showNotice(Component.translatable("gui.retrograde.biome_edit.done", targets.size()).getString());
+		openScreen(this);
+	}
+
 	/**
 	 * Regen goes through a preview rather than a yes/no dialog. A confirm
 	 * box can say "42 chunks" and nothing more; this is the one action in
@@ -1275,7 +1544,7 @@ public class ChunkMapScreen extends Screen {
 	 * what ore is down there, how long you'll be sat watching - are all
 	 * knowable before it starts.
 	 */
-	private void beginRegen() {
+	void beginRegen() {
 		if (selection.isEmpty()) return;
 		List<ChunkPos> targets = List.copyOf(selection);
 		openScreen(new RegenPreviewScreen(this, targets, selectedTouchedCount, selectedUndoCount,
@@ -1316,7 +1585,7 @@ public class ChunkMapScreen extends Screen {
 		return unscanned;
 	}
 
-	private void beginUndo() {
+	void beginUndo() {
 		if (selection.isEmpty()) return;
 		List<ChunkPos> targets = List.copyOf(selection);
 		confirmThen(
@@ -1325,7 +1594,7 @@ public class ChunkMapScreen extends Screen {
 			() -> startJob(ChunkRegenJob.Mode.UNDO, targets, null));
 	}
 
-	private void beginRetrogen() {
+	void beginRetrogen() {
 		if (selection.isEmpty()) return;
 		List<RetrogenIntegration> integrations = RetrogenService.available();
 		if (integrations.isEmpty()) {

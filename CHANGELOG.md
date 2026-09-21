@@ -75,3 +75,30 @@
   default states are bare strings now, and the rest are keyed `id` instead of
   `Name` - so the reader resolved every one of them to air. It handles all four
   shapes now, verified by decoding real 1.20.1 and 26.3 saves
+- Map panels size themselves to the window instead of to fixed constants.
+  The old layout wanted 253 of the 256 rows a 1366x768 screen has at GUI
+  scale 3 for the left column alone, and 342 of its 455 columns once the
+  filter was open; at scale 4 it ran off the bottom outright. Panels now
+  shrink toward a floor, the ore grid drops rows and then disappears when
+  the window is short, and the ore/filter panel moves to the right edge -
+  or over the left column - rather than eating the middle of the map
+- Regenerate, Undo and Retrogen moved off the map into one Chunk
+  Manipulation menu. The action panel is two rows tall whatever ends up in
+  that menu, and each operation gets a screen with room to say what it does
+  before it does it
+- Added a settings screen behind a gear in the icon cluster: slime chunk
+  display, confirmation on destructive actions, the opaque progress
+  backdrop, the unload and watchdog timeouts, and a master switch for
+  world-altering extras. Settings persist to config/retrograde.properties
+- Anything that hands you resources you didn't earn is off by default and
+  hidden rather than greyed out while the master switch is off, so a world
+  played straight never shows the buttons
+- Added slime chunks: tinted green on the map and called out on the info
+  panel, using vanilla's own seedSlimeChunk rule rather than a
+  reimplementation of it. Overworld only, since the same maths produces a
+  convincing and meaningless pattern anywhere else
+- Added biome editing (behind the extras switch): pick from every biome the
+  world registered and rewrite the selection in place via vanilla's
+  fillbiome, against a permission-4 command source so it works in a world
+  without cheats enabled. Blocks don't move - only fog, grass colour,
+  weather and mob spawns change

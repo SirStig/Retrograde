@@ -53,6 +53,45 @@ way, and "only new biomes" would additionally need snapshotting what
 generator settings were active when a chunk was first generated, which
 isn't tracked anywhere right now.
 
+## Ore editing
+
+The settings screen has a toggle for it; the Chunk Manipulation menu has no
+row for it yet, on purpose. The obvious implementation - scatter ore blocks
+into an already-generated chunk - produces something that doesn't look like
+worldgen (wrong vein shapes, wrong depth distribution, no respect for the
+biome or the surrounding stone type) and can't be undone precisely, since
+regen's undo snapshot is per-chunk and would roll back everything else too.
+
+The honest version is the vanilla-ore retrogen described above: re-run just
+the vanilla ore configured features against the existing chunk, the same way
+the Mekanism integration re-runs Mekanism's. That gives real veins in real
+places, and "more ore" becomes "run it again" rather than a number to type
+in. "Less ore" has no equivalent and probably shouldn't - removing ore from
+a chunk you may have already mined is a diff problem, not a generation one.
+
+## Progress screen hardening
+
+Still outstanding, and the reason the settings screen already carries the
+timeouts and the opaque-backdrop toggle that these will use:
+
+- The backdrop setting exists and persists but RegenProgressScreen doesn't
+  read it yet, so the screen is still whatever it was. The point of it is
+  that regen parks you above the build height and brings you back, and
+  watching that happen through a translucent screen reads as the game
+  having broken.
+- `watchdogTimeoutSeconds` is stored and clamped but nothing watches. What
+  it's for: a job that stops making progress at all (a chunk that won't
+  unload for a reason the 30-second unload timeout doesn't cover, a step
+  that throws) should abort itself, restore the saved player position and
+  flags, and say so - rather than leaving the screen spinning on a job
+  that will never advance.
+- Cancel finishes the current chunk cleanly, which is right, but there's no
+  second press that means "stop now, I'll take the mess" for when the
+  clean path is itself what's wedged.
+- None of this covers a hard client kill mid-regen, which still strands the
+  player at the staging position. That needs the persisted-job work in the
+  gaps list below.
+
 ## Other known gaps
 
 - Retrogen wrapper only has Mekanism so far (see RetrogenIntegrations).

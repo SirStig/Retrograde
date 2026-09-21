@@ -66,10 +66,48 @@ and count - in its own panel alongside, rather than leaving the rarest ones
 hidden behind a "+4" you can't do anything with.
 
 The one below it is the selection: shift-drag to box-select a region,
-ctrl-drag to deselect, click to toggle a single chunk, then pick Regenerate,
-Undo, Retrogen, Find or Clear. Selected chunks are tinted and outlined on the
+ctrl-drag to deselect, click to toggle a single chunk, then pick Chunk
+Manipulation, Find or Clear. Selected chunks are tinted and outlined on the
 map, and the panel says how many are selected and how many of those you've
 touched.
+
+Both panels size themselves to the window rather than to fixed numbers.
+That matters more than it sounds: the fixed layout wanted 253 of the 256
+rows a 1366x768 screen has at GUI scale 3 just for the left column, and 342
+of its 455 columns once the filter was open, which left the map itself a
+113px strip. Panels now shrink toward a floor, the ore icon grid drops to
+one row and then disappears entirely when the window is short, and the
+ore/filter panel moves to the right edge - or, on a really small window, on
+top of the left column - instead of taking another bite out of the middle.
+
+Chunk Manipulation is where everything that changes a chunk lives:
+Regenerate, Undo, another mod's Retrogen, and whatever else is switched on.
+It's one button rather than five because the action panel stays two rows
+tall however long that list gets, and because operations that rewrite your
+world deserve a screen that can explain them rather than a tooltip.
+
+The gear in the icon cluster opens settings: slime chunks, confirmation on
+destructive actions, the opaque progress backdrop, how long a job waits for
+a chunk to unload, how long it may stall before the watchdog puts you back
+- and a master switch for operations that can hand you things you didn't
+earn. That switch is off by default, and while it's off those operations
+aren't greyed out, they're absent, so a world you meant to play straight
+never shows you the button. Settings live in
+`config/retrograde.properties`.
+
+Slime chunks are tinted green on the map and called out on the info panel,
+via vanilla's own `seedSlimeChunk` rule rather than a reimplementation of
+the scramble. Overworld only - the same maths produces a perfectly
+convincing and entirely meaningless pattern in the Nether.
+
+Biome editing (behind the extras switch) rewrites the selection's biome in
+place through vanilla's `fillbiome`, picked from every biome the world
+registered rather than just the ones you've visited. It runs against a
+permission-4 command source built from the server, so it works in a world
+that doesn't have cheats on - the gate is Retrograde's setting, not the
+world's. Nothing moves: a desert turned swamp is a desert with swamp fog,
+mob spawns and grass colour. Reshaping the terrain to match is a regen,
+which is a different button in the same menu.
 
 A bare left-drag pans, which is what dragging a map does everywhere else; box
 selection is the same drag with shift held. Right-drag and middle-drag also
@@ -121,8 +159,23 @@ working, and how the title chip, icon cluster, chunk grid, and ore readout
 were confirmed to render, screenshotted live in a 1.20.1 world.
 
 The selection UI, the progress screen, the teleport-out-and-back regen job,
-the saved-chunk reader, the chunk filter and the regen preview are new and
-have a clean compile on all six targets behind them, nothing more. Anything
+the saved-chunk reader, the chunk filter, the regen preview, the responsive
+layout, the Chunk Manipulation menu, the settings screen, slime chunks and
+biome editing are new and have a clean compile on all six targets behind
+them, nothing more. The responsive layout's thresholds were worked out
+against the arithmetic rather than by looking at it, so the tiers are
+reasoned, not seen.
+
+Four things there were checked against the shipped classes rather than
+assumed, because all four would fail silently or crash on a version that
+disagreed: `Minecraft#gameDirectory` is a public `File` on all three MC
+versions (so settings need no per-loader config path), `fillbiome` is
+present in all three (6, 7 and 9 occurrences respectively),
+`Commands#performPrefixedCommand` and `MinecraftServer#createCommandSourceStack`
+are unchanged, and `WorldgenRandom#seedSlimeChunk(int,int,long,long)` has
+the same signature on 26.1 and 26.3 - 26.3 moving the Slime entity into a
+cubemob package didn't touch it. 1.20.1's jar is fully obfuscated so it
+can't be checked that way; that it compiles there is the evidence. Anything
 needing a mouse is unverified in general: the environment I can test in has
 keyboard input only, so drag-to-pan, scroll-to-zoom, click-to-select,
 box-select, the ore breakdown toggle and every button on the filter panel
