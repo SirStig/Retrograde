@@ -220,7 +220,8 @@ public class RegenProgressScreen extends Screen {
 
 		int x = cardX();
 		int y = cardY();
-		painter.panel(x, y, CARD_WIDTH, CARD_HEIGHT, COLOR_CARD_BG, COLOR_CARD_EDGE_LIGHT, COLOR_CARD_EDGE_DARK);
+		painter.dropShadow(x, y, CARD_WIDTH, CARD_HEIGHT, 0xA0000000, 5);
+		painter.roundedPanel(x, y, CARD_WIDTH, CARD_HEIGHT, COLOR_CARD_BG, COLOR_CARD_EDGE_LIGHT, COLOR_CARD_EDGE_DARK);
 
 		int textX = x + CARD_PAD;
 		int innerWidth = CARD_WIDTH - CARD_PAD * 2;
