@@ -11,6 +11,9 @@ build/
 run/
 #versions/datagen
 
+# Stonecutter's record of which version/loader tree is active locally.
+.sc_active_version
+
 ### IntelliJ IDEA ###
 .idea/modules.xml
 .idea/jarRepositories.xml
