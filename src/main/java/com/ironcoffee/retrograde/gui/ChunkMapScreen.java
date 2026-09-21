@@ -35,6 +35,8 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import static com.ironcoffee.retrograde.gui.InputCodes.*;
+
 /**
  * Full-screen, pannable, zoomable chunk map, one texture per chunk (see
  * ChunkMapDataCache) blitted at whatever scale the current zoom level
@@ -78,49 +80,8 @@ public class ChunkMapScreen extends Screen {
 	private static final int MAX_ZOOM = 4;
 	private static final int DRAG_THRESHOLD = 5;
 
-	// Mouse-button and key numbers, spelled out rather than pulling LWJGL or
-	// SDL into a file that otherwise only touches Minecraft classes.
-	//
-	// 26.3 swapped the input backend from GLFW to SDL, which numbers both the
-	// mouse buttons and the non-printable keys differently - vanilla's own
-	// AbstractWidget treats button 1 as the left button on 26.3 and button 0
-	// on everything before it, which is how this was pinned down. Printable
-	// keys are ASCII either way, so '-' and '=' are shared.
-	// Letters are the one place the two eras disagree about ASCII: GLFW reports
-	// them uppercase, SDL lowercase. Checked against vanilla rather than
-	// assumed - InputWithModifiers#isCopy compares its shortcut key to 99 on
-	// 26.3, and InputConstants.KEY_A is 65 on 26.1.
-	//? if >=26.3 {
-	/*private static final int BUTTON_LEFT = 1;
-	private static final int BUTTON_MIDDLE = 2;
-	private static final int BUTTON_RIGHT = 3;
-	private static final int KEY_RIGHT = 1073741903;
-	private static final int KEY_LEFT = 1073741904;
-	private static final int KEY_DOWN = 1073741905;
-	private static final int KEY_UP = 1073741906;
-	private static final int KEY_KP_SUBTRACT = 1073741910;
-	private static final int KEY_KP_ADD = 1073741911;
-	private static final int KEY_W = 119;
-	private static final int KEY_A = 97;
-	private static final int KEY_S = 115;
-	private static final int KEY_D = 100;
-	*///?} else {
-	private static final int BUTTON_LEFT = 0;
-	private static final int BUTTON_RIGHT = 1;
-	private static final int BUTTON_MIDDLE = 2;
-	private static final int KEY_RIGHT = 262;
-	private static final int KEY_LEFT = 263;
-	private static final int KEY_DOWN = 264;
-	private static final int KEY_UP = 265;
-	private static final int KEY_KP_SUBTRACT = 333;
-	private static final int KEY_KP_ADD = 334;
-	private static final int KEY_W = 87;
-	private static final int KEY_A = 65;
-	private static final int KEY_S = 83;
-	private static final int KEY_D = 68;
-	//?}
-	private static final int KEY_MINUS = 45;
-	private static final int KEY_EQUAL = 61;
+	// Mouse-button and key numbers now live in InputCodes (see that file for
+	// why), imported statically below.
 	/** How far one arrow-key press slides the map, in screen pixels. */
 	private static final int KEY_PAN_PIXELS = 48;
 
@@ -142,10 +103,11 @@ public class ChunkMapScreen extends Screen {
 	private static final int LINE_H = 10;
 	private static final int ORE_ROW_H = 18;
 	private static final int ORE_ICON = 16;
-	private static final int ORE_COLUMNS = 3;
+	/** Preferred visible rows in the info panel's scrollable ore list before the column runs out of room. */
 	private static final int ORE_ROWS = 2;
-	private static final int ORE_TOGGLE_W = 13;
-	private static final int ORE_TOGGLE_H = 11;
+	private static final int ORE_SCROLLBAR_W = 3;
+	/** Scroll wheel steps in pixels, one ore row per notch rather than a fixed fraction of the list. */
+	private static final int ORE_SCROLL_STEP = ORE_ROW_H;
 	private static final int ORE_PANEL_GAP = 6;
 	private static final int ACTION_BUTTON_H = 18;
 	private static final int ACTION_BUTTON_GAP = 4;
@@ -211,6 +173,30 @@ public class ChunkMapScreen extends Screen {
 	private static final int COLOR_SLIME_EDGE = 0x8055CC55;
 	private static final int COLOR_MATCH_TINT = 0x55D8A03C;
 	private static final int COLOR_MATCH_EDGE = 0xFFF0C060;
+	private static final int COLOR_GEAR_ICON = 0xFFD8DEE4;
+	private static final int COLOR_GEAR_HOLE = 0xFF232629;
+
+	// ----- overlay system palette, shared by ManipulationOverlay and SettingsOverlay -----
+	//
+	// Deliberately no full-screen scrim: these overlays are meant to read as
+	// panels floating over the still-visible, still-live map - drawn over it
+	// rather than replacing it, per the whole point of this being an overlay
+	// and not a screen swap - so the only visual weight they get is their own
+	// shadow and border, not a dimmed-out world behind them.
+	static final int COLOR_OVERLAY_BG = 0xF2181B1F;
+	static final int COLOR_OVERLAY_EDGE_LIGHT = 0x50FFFFFF;
+	static final int COLOR_OVERLAY_EDGE_DARK = 0x90000000;
+	static final int COLOR_OVERLAY_SHADOW = 0xA0000000;
+	static final int COLOR_OVERLAY_ACCENT = 0xFF6FA8F0;
+	static final int COLOR_OVERLAY_HEADING = 0xFF8AA0B4;
+	static final int COLOR_OVERLAY_LABEL = 0xFFAEB6BE;
+	static final int COLOR_OVERLAY_VALUE = 0xFFF0F0F0;
+	static final int COLOR_OVERLAY_DIVIDER = 0x40FFFFFF;
+	static final int COLOR_OVERLAY_WARN = 0xFFE06060;
+	static final int COLOR_OVERLAY_OK = 0xFF6FCF6F;
+	static final int COLOR_OVERLAY_CAUTION = 0xFFD8B24C;
+	static final int COLOR_OVERLAY_SCROLLBAR_TRACK = 0x60FFFFFF;
+	static final int COLOR_OVERLAY_SCROLLBAR_THUMB = 0xC0C8D4E0;
 
 	// ----- map mode palettes -----
 	/** Flat fill for a chunk whose data hasn't been read yet, in any data mode. */
@@ -273,7 +259,6 @@ public class ChunkMapScreen extends Screen {
 	private int titleX, titleY, titleW, titleH;
 	private int hintX, hintY, hintW, hintH;
 	private int panelX, infoPanelY, infoPanelH, actionPanelY, actionPanelH;
-	private int oreListY, oreListH;
 
 	// ----- responsive layout, all resolved in init() -----
 
@@ -283,15 +268,10 @@ public class ChunkMapScreen extends Screen {
 	private int sidePanelW = FILTER_PANEL_WIDTH;
 	/** Top-left of the secondary panel slot, wherever it ended up fitting. */
 	private int sidePanelX, sidePanelY;
-	/** Rows of the info panel's ore icon grid: 2 normally, 1 when short. */
+	/** Visible rows of the info panel's scrollable ore list: 2 normally, fewer when short. */
 	private int oreRows = ORE_ROWS;
-	/** How many ores the icon grid has room for, {@link #oreRows} dependent. */
-	private int maxPanelOres = ORE_COLUMNS * ORE_ROWS;
 	/** True when the secondary panel had to be laid over the left column. */
 	private boolean sidePanelOverlaps;
-
-	/** Whether the full ore breakdown is pinned open beside the info panel. */
-	private boolean oreListOpen;
 
 	// ----- map modes -----
 
@@ -365,7 +345,17 @@ public class ChunkMapScreen extends Screen {
 	private Button manipulateButton;
 	private Button clearButton;
 	private Button findButton;
-	private Button oreToggle;
+	private Button settingsButton;
+
+	/** The two panels that float over the map rather than swapping the screen out. */
+	private final ManipulationOverlay manipulationOverlay = new ManipulationOverlay(this);
+	private final SettingsOverlay settingsOverlay = new SettingsOverlay(this);
+
+	/** Scroll position of the info panel's ore list, in pixels; see {@link #drawOreSection}. */
+	private int oreScrollPx;
+	/** Which chunk {@link #oreScrollPx} belongs to, so hovering a new one resets it to the top. */
+	private ChunkPos oreScrollChunk;
+	private int oreListViewX, oreListViewY, oreListViewW, oreListViewH;
 	private Button filterScopeButton;
 	private Button filterTouchedButton;
 	private Button filterBiomeButton;
@@ -415,7 +405,10 @@ public class ChunkMapScreen extends Screen {
 			.bounds(x, clusterY, ICON_SIZE, ICON_SIZE).build());
 		syncMapModeButton();
 		x += ICON_SIZE + ICON_GAP;
-		addRenderableWidget(Button.builder(Component.literal("⚙"), b -> openSettings())
+		// Empty label: the gear itself is drawn in drawIconOverlays(), a real
+		// shape built from Painter primitives rather than a font glyph that
+		// goes fuzzy or lopsided depending on what font pack is loaded.
+		settingsButton = addRenderableWidget(Button.builder(Component.empty(), b -> toggleSettings())
 			.tooltip(Tooltip.create(Component.translatable("gui.retrograde.chunk_map.settings")))
 			.bounds(x, clusterY, ICON_SIZE, ICON_SIZE).build());
 		x += ICON_SIZE + ICON_GAP;
@@ -453,28 +446,18 @@ public class ChunkMapScreen extends Screen {
 			+ ACTION_ROWS * ACTION_BUTTON_H + (ACTION_ROWS - 1) * ACTION_BUTTON_GAP;
 
 		// Everything from the top margin down to the controls hint is the
-		// column's budget. When it doesn't fit, the ore icon grid is what
-		// gives - the same ores are still one click away in the breakdown
-		// panel, whereas a clipped action panel means unreachable buttons.
+		// column's budget. When it doesn't fit, the ore list viewport is what
+		// shrinks first - it scrolls now, so a shorter viewport still reaches
+		// every ore, whereas a clipped action panel means unreachable buttons.
 		int columnBudget = hintY - infoPanelY - 4;
 		oreRows = ORE_ROWS;
 		while (oreRows > 0 && infoPanelHeight(oreRows) + 6 + actionPanelH > columnBudget) {
 			oreRows--;
 		}
-		maxPanelOres = ORE_COLUMNS * oreRows;
 		infoPanelH = infoPanelHeight(oreRows);
 		actionPanelY = infoPanelY + infoPanelH + 6;
 
-		// Sits on the ore heading row, right-aligned inside the info panel.
-		oreToggle = addRenderableWidget(Button.builder(Component.literal(oreListOpen ? "«" : "»"), b -> toggleOreList())
-			.tooltip(Tooltip.create(Component.translatable("gui.retrograde.chunk_map.panel.ores.tip")))
-			.bounds(panelX + panelW - PANEL_PAD - ORE_TOGGLE_W,
-				infoPanelY + PANEL_PAD + LINE_H * 3 + 4, ORE_TOGGLE_W, ORE_TOGGLE_H)
-			.build());
-
 		layOutSidePanelSlot();
-		oreListY = sidePanelY;
-		oreListH = 0;
 
 		int buttonX = panelX + PANEL_PAD;
 		int buttonW = panelW - PANEL_PAD * 2;
@@ -494,17 +477,18 @@ public class ChunkMapScreen extends Screen {
 			"gui.retrograde.chunk_map.action.clear.tip", b -> clearSelection());
 
 		initFilterPanel();
+		manipulationOverlay.layout(width, height);
+		settingsOverlay.layout(width, height);
 		refreshSelectionStats();
 	}
 
-	/** Coordinates, status, biome, divider, ore heading, then {@code rows} of icons. */
+	/** Coordinates, status, biome, divider, ore heading, then {@code rows} of visible ore-list rows. */
 	private int infoPanelHeight(int rows) {
 		return PANEL_PAD * 2 + LINE_H * 4 + 5 + ORE_ROW_H * rows;
 	}
 
 	/**
-	 * Decides where the ore breakdown and the filter get to live, in order of
-	 * preference:
+	 * Decides where the chunk filter gets to live, in order of preference:
 	 *
 	 * <ol>
 	 *   <li>Beside the info panel, while the two together stay inside
@@ -663,6 +647,9 @@ public class ChunkMapScreen extends Screen {
 			refreshFilter();
 		}
 		syncActionButtons();
+		if (manipulationOverlay.isOpen()) {
+			manipulationOverlay.tick();
+		}
 	}
 
 	private void syncActionButtons() {
@@ -679,14 +666,10 @@ public class ChunkMapScreen extends Screen {
 		// When the window was too narrow to give the secondary panel its own
 		// column it sits on top of this one, so the buttons underneath have to
 		// stop taking clicks meant for the panel covering them.
-		boolean buried = sidePanelOverlaps && (filterOpen || oreListOpen);
+		boolean buried = sidePanelOverlaps && filterOpen;
 		manipulateButton.visible = !buried;
 		clearButton.visible = !buried;
 		findButton.visible = !buried;
-		// The ore toggle stays, and stays on top, even when the breakdown is
-		// covering the panel it normally lives on: it is the only way to put
-		// that panel away again, where the filter has its own Close button.
-		oreToggle.visible = true;
 	}
 
 	private void recenterOnPlayer() {
@@ -738,7 +721,8 @@ public class ChunkMapScreen extends Screen {
 		return mapCenterY() + (blockZ - cameraBlockZ) * pixelsPerBlock();
 	}
 
-	private boolean isOverChip(double mouseX, double mouseY, int x, int y, int w, int h) {
+	/** Package-private: the overlay classes hit-test their own bounds against the cursor with this too. */
+	boolean isOverChip(double mouseX, double mouseY, int x, int y, int w, int h) {
 		return mouseX >= x && mouseX < x + w && mouseY >= y && mouseY < y + h;
 	}
 
@@ -748,11 +732,12 @@ public class ChunkMapScreen extends Screen {
 		if (isOverChip(mouseX, mouseY, hintX, hintY, hintW, hintH)) return false;
 		int columnH = actionPanelY + actionPanelH - infoPanelY;
 		if (isOverChip(mouseX, mouseY, panelX, infoPanelY, panelW, columnH)) return false;
-		// The expanded ore list floats over the map, and it describes whichever
-		// chunk is in focus - so hovering it must not change what's in focus,
-		// or the list would rewrite itself out from under the cursor.
-		if (oreListOpen && isOverChip(mouseX, mouseY, sidePanelX, oreListY, sidePanelW, oreListH)) return false;
 		if (filterOpen && isOverChip(mouseX, mouseY, filterX, filterY, sidePanelW, filterH)) return false;
+		// The manipulation and settings overlays float over the map and take
+		// their own input - see handlePress/handleDrag/handleScroll, which
+		// check these same two bounds before falling through to panning.
+		if (manipulationOverlay.isOpen() && manipulationOverlay.contains(mouseX, mouseY)) return false;
+		if (settingsOverlay.isOpen() && settingsOverlay.contains(mouseX, mouseY)) return false;
 		return true;
 	}
 
@@ -799,8 +784,10 @@ public class ChunkMapScreen extends Screen {
 	//? if <26 {
 	@Override
 	public void render(GuiGraphics guiGraphics, int mouseX, int mouseY, float partialTick) {
-		draw(new Painter(guiGraphics), mouseX, mouseY);
+		Painter painter = new Painter(guiGraphics);
+		draw(painter, mouseX, mouseY);
 		super.render(guiGraphics, mouseX, mouseY, partialTick);
+		drawIconOverlays(painter);
 	}
 
 	@Override
@@ -809,14 +796,30 @@ public class ChunkMapScreen extends Screen {
 	//?} else {
 	/*@Override
 	public void extractRenderState(GuiGraphicsExtractor guiGraphics, int mouseX, int mouseY, float partialTick) {
-		draw(new Painter(guiGraphics), mouseX, mouseY);
+		Painter painter = new Painter(guiGraphics);
+		draw(painter, mouseX, mouseY);
 		super.extractRenderState(guiGraphics, mouseX, mouseY, partialTick);
+		drawIconOverlays(painter);
 	}
 
 	@Override
 	public void extractBackground(GuiGraphicsExtractor guiGraphics, int mouseX, int mouseY, float partialTick) {
 	}
 	*///?}
+
+	/**
+	 * Drawn after super.render()/extractRenderState() rather than before, so
+	 * it lands on top of the button's own bezel and hover tint the same way
+	 * vanilla's own text label would - this replaces where a label would sit,
+	 * it doesn't need to duck under one.
+	 */
+	private void drawIconOverlays(Painter painter) {
+		if (settingsButton == null) return;
+		int cx = settingsButton.getX() + settingsButton.getWidth() / 2;
+		int cy = settingsButton.getY() + settingsButton.getHeight() / 2;
+		int radius = Math.max(4, Math.min(settingsButton.getWidth(), settingsButton.getHeight()) / 2 - 4);
+		painter.gearIcon(cx, cy, radius, COLOR_GEAR_ICON, COLOR_GEAR_HOLE);
+	}
 
 	private void draw(Painter painter, int mouseX, int mouseY) {
 		painter.fill(0, 0, width, height, COLOR_MAP_BG);
@@ -865,19 +868,34 @@ public class ChunkMapScreen extends Screen {
 				painter.fill(x1, y1, x2, y2, modeColor(chunk.pos(), dimension, tracker));
 			}
 
+			// Player tint answers "where am I", not "what's in this chunk" - an
+			// orientation marker rather than a data overlay - so it draws
+			// regardless of status. In practice the chunk you're standing in
+			// is never UNGENERATED, but it is briefly PENDING (map just
+			// opened, or you stepped into a chunk the cache hasn't sampled
+			// yet), and losing your own position marker for that one frame
+			// would be worse than a flat-grey square wearing a yellow tint.
 			if (chunk.pos().equals(playerChunk)) {
 				painter.fill(x1, y1, x2, y2, COLOR_PLAYER_TINT);
-			} else if (mapMode != MapMode.TOUCHED
+			} else if (status == ChunkMapDataCache.Status.READY && mapMode != MapMode.TOUCHED
 				&& tracker.statusOf(dimension, chunk.pos()) == ChunkTracker.Status.TOUCHED) {
 				// Skipped in TOUCHED mode: the fill underneath already says it,
 				// and a wash over half the squares in a two-colour map is noise.
+				// Gated on READY otherwise: touched-or-not describes what's in
+				// the chunk, same as slime below, and a green wash over a grey
+				// "nothing here yet" or "still loading" square reads as broken
+				// rather than as information.
 				painter.fill(x1, y1, x2, y2, COLOR_TOUCHED_TINT);
 			}
 
 			// Under the grid lines and everything interactive, because this is
 			// a property of the coordinates rather than anything you did or
 			// selected - it should read as part of the terrain, not as state.
-			if (slimeChunks && isSlimeChunk(worldSeed, chunk.pos())) {
+			// Gated on READY: the slime pattern is knowable from the seed
+			// alone without reading the chunk, but painting it over an
+			// UNGENERATED or PENDING square dresses up a placeholder as real
+			// information, which is the exact bug this whole fix is for.
+			if (status == ChunkMapDataCache.Status.READY && slimeChunks && isSlimeChunk(worldSeed, chunk.pos())) {
 				painter.fill(x1, y1, x2, y2, COLOR_SLIME_TINT);
 				if (chunk.size() >= CHUNK_BLOCKS) {
 					painter.outline(x1, y1, chunk.size(), chunk.size(), COLOR_SLIME_EDGE);
@@ -920,6 +938,14 @@ public class ChunkMapScreen extends Screen {
 		drawActionPanel(painter);
 		if (filterOpen) {
 			drawFilterPanel(painter);
+		}
+		// Drawn last, over everything else on the map: both are the "on top of
+		// the map" overlays the rest of this screen defers to when they're open.
+		if (manipulationOverlay.isOpen()) {
+			manipulationOverlay.draw(painter, mouseX, mouseY);
+		}
+		if (settingsOverlay.isOpen()) {
+			settingsOverlay.draw(painter, mouseX, mouseY);
 		}
 	}
 
@@ -1063,7 +1089,8 @@ public class ChunkMapScreen extends Screen {
 		drawChip(painter, panelX, infoPanelY, panelW, infoPanelH);
 		// Recomputed below if the list actually gets drawn this frame; zeroed
 		// here so a chunk with no ore data leaves no phantom hit-box behind.
-		oreListH = 0;
+		oreListViewW = 0;
+		oreListViewH = 0;
 
 		int textX = panelX + PANEL_PAD;
 		int y = infoPanelY + PANEL_PAD;
@@ -1130,89 +1157,83 @@ public class ChunkMapScreen extends Screen {
 			return;
 		}
 
-		// Too short a window for even one row of icons. The heading above
-		// already carries the count, and the breakdown toggle beside it still
-		// opens the full list, so there's nothing left to say here.
-		if (oreRows <= 0) {
-			if (oreListOpen) drawOreListPanel(painter, ores);
-			return;
+		// Too short a window for even a one-row viewport - the heading above
+		// still carries the count, and there's nowhere left to scroll a list
+		// into, so the section simply isn't drawn.
+		if (oreRows <= 0) return;
+
+		// A new chunk under the cursor starts its list at the top rather than
+		// wherever the last one happened to leave it.
+		if (!pos.equals(oreScrollChunk)) {
+			oreScrollChunk = pos;
+			oreScrollPx = 0;
 		}
 
-		// Ores as a compact icon grid rather than one labelled row each: the
-		// icon already says which ore it is, so the name was just width.
-		int cellWidth = (panelW - PANEL_PAD * 2) / ORE_COLUMNS;
-		// Entries come sorted by count, so when there are more than fit, the
-		// ones dropped are the rarest - and the last cell says how many, so
-		// the panel never quietly under-reports what's down there. The full
-		// list is one click away on the toggle beside the heading.
-		boolean overflow = ores.size() > maxPanelOres;
-		int shown = overflow ? maxPanelOres - 1 : ores.size();
-		for (int i = 0; i < shown; i++) {
-			ChunkResourceInfo.Entry entry = ores.get(i);
-			int cellX = textX + (i % ORE_COLUMNS) * cellWidth;
-			int cellY = y + (i / ORE_COLUMNS) * ORE_ROW_H;
-			painter.item(new ItemStack(entry.block()), cellX, cellY);
-			painter.text(font, String.valueOf(entry.count()), cellX + ORE_ICON + 2, cellY + 4, 0xFFFFFFFF);
-		}
-		if (overflow) {
-			int cellX = textX + (shown % ORE_COLUMNS) * cellWidth;
-			int cellY = y + (shown / ORE_COLUMNS) * ORE_ROW_H;
-			painter.text(font, "+" + (ores.size() - shown), cellX, cellY + 4, COLOR_SELECTED_EDGE);
-		}
-
-		if (oreListOpen) {
-			drawOreListPanel(painter, ores);
-		}
+		int w = panelW - PANEL_PAD * 2;
+		int h = oreRows * ORE_ROW_H;
+		oreScrollPx = drawOreList(painter, ores, textX, y, w, h, oreScrollPx);
+		oreListViewX = textX;
+		oreListViewY = y;
+		oreListViewW = w;
+		oreListViewH = h;
 	}
 
 	/**
-	 * The full breakdown, one ore per row with its name spelled out, in its
-	 * own panel to the right of the info panel - so opening it doesn't move
-	 * or resize anything that was already on screen.
+	 * Every ore for whatever this list is describing (a single chunk here,
+	 * the whole selection in ManipulationOverlay), one row each with its
+	 * icon, name and count, scrolled in place rather than capped with a
+	 * "show more" panel. Package-private so ManipulationOverlay's selection
+	 * breakdown draws through the exact same rows-plus-scrollbar code - each
+	 * caller keeps its own scroll offset and view bounds, since the info
+	 * panel and the overlay are never showing the same list.
+	 *
+	 * Clipped with the engine's own scissor rather than just trusting the
+	 * caller's row math: a scroll offset one row short of the end would
+	 * otherwise draw half a row past the viewport and into whatever panel
+	 * sits below it.
+	 *
+	 * @return the scroll offset actually used, clamped to the list's real
+	 *         length - the caller stores this back so a chunk that just lost
+	 *         a few ores from a regen can't leave the list scrolled past its
+	 *         own end.
 	 */
-	private void drawOreListPanel(Painter painter, List<ChunkResourceInfo.Entry> ores) {
-		// Never let the list run off the bottom of the window; whatever doesn't
-		// fit is counted on a final line rather than silently clipped.
-		int room = height - CHIP_MARGIN - oreListY - PANEL_PAD * 2 - LINE_H;
-		int maxRows = Math.max(1, room / ORE_ROW_H);
-		boolean clipped = ores.size() > maxRows;
-		int rows = clipped ? maxRows - 1 : ores.size();
+	int drawOreList(Painter painter, List<ChunkResourceInfo.Entry> ores, int x, int y, int w, int h, int scrollPx) {
+		int contentH = ores.size() * ORE_ROW_H;
+		int maxScroll = Math.max(0, contentH - h);
+		int scroll = Math.max(0, Math.min(scrollPx, maxScroll));
 
-		oreListH = PANEL_PAD * 2 + LINE_H + (rows + (clipped ? 1 : 0)) * ORE_ROW_H;
-		drawChip(painter, sidePanelX, oreListY, sidePanelW, oreListH);
+		boolean scrollable = contentH > h;
+		int listW = scrollable ? w - ORE_SCROLLBAR_W - 3 : w;
+		int countX = x + listW;
 
-		int textX = sidePanelX + PANEL_PAD;
-		int y = oreListY + PANEL_PAD;
-		painter.text(font, Component.translatable("gui.retrograde.chunk_map.panel.ore_list"), textX, y, COLOR_HEADING);
-		y += LINE_H;
-
-		for (int i = 0; i < rows; i++) {
+		painter.scissor(x, y, x + w, y + h);
+		int firstRow = scroll / ORE_ROW_H;
+		int rowY = y - (scroll % ORE_ROW_H);
+		for (int i = firstRow; i < ores.size() && rowY < y + h; i++) {
 			ChunkResourceInfo.Entry entry = ores.get(i);
 			ItemStack stack = new ItemStack(entry.block());
-			painter.item(stack, textX, y);
+			painter.item(stack, x, rowY);
 			String count = String.valueOf(entry.count());
-			int countX = sidePanelX + sidePanelW - PANEL_PAD - font.width(count);
-			painter.text(font, count, countX, y + 4, 0xFFFFFFFF);
-			// Trim the name against where the count starts, not the panel edge,
-			// so a long modded ore name can't overwrite its own number.
-			int nameX = textX + ORE_ICON + 4;
-			painter.text(font, trimTo(stack.getHoverName().getString(), countX - nameX - 4),
-				nameX, y + 4, COLOR_BIOME_TEXT);
-			y += ORE_ROW_H;
+			int thisCountX = countX - font.width(count);
+			painter.text(font, count, thisCountX, rowY + 4, 0xFFFFFFFF);
+			int nameX = x + ORE_ICON + 4;
+			painter.text(font, trimTo(stack.getHoverName().getString(), thisCountX - nameX - 4),
+				nameX, rowY + 4, COLOR_BIOME_TEXT);
+			rowY += ORE_ROW_H;
 		}
+		painter.resetScissor();
 
-		if (clipped) {
-			painter.text(font, "+" + (ores.size() - rows), textX, y + 4, COLOR_MESSAGE_TEXT);
+		if (scrollable) {
+			painter.scrollbar(x + w - ORE_SCROLLBAR_W, y, ORE_SCROLLBAR_W, h, contentH, h, scroll,
+				COLOR_OVERLAY_SCROLLBAR_TRACK, COLOR_OVERLAY_SCROLLBAR_THUMB);
 		}
+		return scroll;
 	}
 
-	private void toggleOreList() {
-		oreListOpen = !oreListOpen;
-		if (!oreListOpen) oreListH = 0;
-		// Both live in the same slot beside the info panel, so opening one
-		// puts the other away rather than drawing on top of it.
-		if (oreListOpen && filterOpen) closeFilter();
-		oreToggle.setMessage(Component.literal(oreListOpen ? "«" : "»"));
+	/** True while the cursor sits over the info panel's ore list, for scroll routing. */
+	private boolean isOverOreList(double mouseX, double mouseY) {
+		return oreListViewW > 0 && oreListViewH > 0
+			&& isOverChip(mouseX, mouseY, oreListViewX, oreListViewY, oreListViewW, oreListViewH);
 	}
 
 	// ----- chunk filter -----
@@ -1223,7 +1244,11 @@ public class ChunkMapScreen extends Screen {
 			return;
 		}
 		filterOpen = true;
-		if (oreListOpen) toggleOreList();
+		// Only one floating extra panel at a time - opening Find puts away
+		// whichever overlay was up, the same way opening an overlay closes
+		// Find (see openManipulation/toggleSettings).
+		manipulationOverlay.close();
+		settingsOverlay.close();
 		filterRefreshedAt = 0;
 		refreshFilter();
 		syncActionButtons();
@@ -1524,9 +1549,15 @@ public class ChunkMapScreen extends Screen {
 		return trimTo(text, panelW - PANEL_PAD * 2);
 	}
 
-	private String trimTo(String text, int budget) {
+	/** Package-private: the overlay classes trim their own rows against this same font. */
+	String trimTo(String text, int budget) {
 		if (font.width(text) <= budget) return text;
 		return font.plainSubstrByWidth(text, Math.max(0, budget - font.width("..."))) + "...";
+	}
+
+	/** Package-private accessor: Screen#font is protected and declared in a different package, so overlay classes (not Screen subclasses) can't reach it by field access - only through this. */
+	net.minecraft.client.gui.Font font() {
+		return font;
 	}
 
 	private static String biomeDisplayName(ResourceLocation biomeId) {
@@ -1663,19 +1694,54 @@ public class ChunkMapScreen extends Screen {
 		return selectedUndoCount;
 	}
 
+	/** How many of the selection you've set foot in. */
+	int touchedCount() {
+		return selectedTouchedCount;
+	}
+
+	/** Package-private passthrough so the overlay classes can register vanilla widgets on this screen. */
+	Button addWidget(Button button) {
+		return addRenderableWidget(button);
+	}
+
+	/**
+	 * Package-private passthrough so an overlay can tear down its own
+	 * widgets before rebuilding them - SettingsOverlay does this every time
+	 * a toggle changes how many rows it has. Without it, every click would
+	 * leave its old (merely hidden) buttons in this screen's widget list for
+	 * the rest of the session instead of actually being gone.
+	 */
+	void removeWidget(Button button) {
+		super.removeWidget(button);
+	}
+
+	/** Package-private: the overlays read cached biome/ore data for the whole selection through this. */
+	ChunkMapDataCache dataCache() {
+		return dataCache;
+	}
+
 	/**
 	 * Every operation that changes chunks lives behind this one button, so
 	 * the map keeps a two-row action panel however many operations there
-	 * end up being - and each one gets a screen with room to say what it
-	 * does before it does it.
+	 * end up being. It opens as an overlay over the map rather than a screen
+	 * swap - see ManipulationOverlay - so the map stays visible underneath
+	 * while the selection is being inspected.
 	 */
 	private void openManipulation() {
 		if (selection.isEmpty()) return;
-		openScreen(new ChunkManipulationScreen(this));
+		if (filterOpen) closeFilter();
+		settingsOverlay.close();
+		manipulationOverlay.open();
 	}
 
-	private void openSettings() {
-		openScreen(new RetrogradeSettingsScreen(this));
+	private void toggleSettings() {
+		if (settingsOverlay.isOpen()) {
+			settingsOverlay.close();
+			return;
+		}
+		if (filterOpen) closeFilter();
+		manipulationOverlay.close();
+		settingsOverlay.open();
 	}
 
 	/**
@@ -1803,8 +1869,15 @@ public class ChunkMapScreen extends Screen {
 		startJob(ChunkRegenJob.Mode.REGENERATE, targets, null);
 	}
 
-	/** Every ore across the selection, biggest total first. */
-	private List<ChunkResourceInfo.Entry> aggregateOres(List<ChunkPos> targets) {
+	/**
+	 * Every ore across the selection, biggest total first. Package-private:
+	 * ManipulationOverlay shows this same aggregate for the whole selection
+	 * rather than re-deriving it, since dataCache already has every chunk's
+	 * ore tally cached from the read that drew it on the map - there is
+	 * nothing here worth reading a region file a second time for, even at
+	 * the 256-chunk selection cap.
+	 */
+	List<ChunkResourceInfo.Entry> aggregateOres(List<ChunkPos> targets) {
 		Map<Block, Integer> tally = new LinkedHashMap<>();
 		for (ChunkPos pos : targets) {
 			ChunkResourceInfo.Inspection inspection = dataCache.inspectionOf(pos);
@@ -1820,11 +1893,30 @@ public class ChunkMapScreen extends Screen {
 	}
 
 	/**
+	 * How many chunks of the selection fall in each biome, biggest first.
+	 * Same cached data as {@link #aggregateOres}, so this costs nothing new
+	 * to compute per frame - it's a pass over a list already capped at 256.
+	 */
+	Map<ResourceLocation, Integer> aggregateBiomes(List<ChunkPos> targets) {
+		Map<ResourceLocation, Integer> tally = new LinkedHashMap<>();
+		for (ChunkPos pos : targets) {
+			ChunkResourceInfo.Inspection inspection = dataCache.inspectionOf(pos);
+			if (inspection == null || inspection.biome() == null) continue;
+			tally.merge(inspection.biome(), 1, Integer::sum);
+		}
+		List<Map.Entry<ResourceLocation, Integer>> sorted = new ArrayList<>(tally.entrySet());
+		sorted.sort((a, b) -> b.getValue() - a.getValue());
+		Map<ResourceLocation, Integer> ordered = new LinkedHashMap<>();
+		sorted.forEach(e -> ordered.put(e.getKey(), e.getValue()));
+		return ordered;
+	}
+
+	/**
 	 * How many of the targets the map never got a look inside. The ore
 	 * figures on the preview are a floor, not a total, whenever this isn't
 	 * zero - and saying so is better than quietly under-reporting.
 	 */
-	private int unscannedCount(List<ChunkPos> targets) {
+	int unscannedCount(List<ChunkPos> targets) {
 		int unscanned = 0;
 		for (ChunkPos pos : targets) {
 			if (dataCache.inspectionOf(pos) == null) unscanned++;
@@ -2063,8 +2155,29 @@ public class ChunkMapScreen extends Screen {
 		return true;
 	}
 
+	/**
+	 * Scroll is the one input every floating panel on this screen has to
+	 * fight the map for: the map itself treats it as zoom, so anything drawn
+	 * over the map that also wants to scroll - the overlays' ore lists, the
+	 * info panel's ore list - has to claim it first or every attempt to
+	 * scroll a list would also zoom the map out from under it.
+	 */
 	private boolean handleScroll(double mouseX, double mouseY, double scrollDelta) {
-		if (!isOverMap(mouseX, mouseY) || scrollDelta == 0) return false;
+		if (scrollDelta == 0) return false;
+		if (manipulationOverlay.isOpen() && manipulationOverlay.contains(mouseX, mouseY)) {
+			manipulationOverlay.scroll(mouseX, mouseY, scrollDelta);
+			return true;
+		}
+		if (settingsOverlay.isOpen() && settingsOverlay.contains(mouseX, mouseY)) {
+			// Nothing in settings scrolls yet, but the overlay still owns
+			// every pixel inside its own bounds.
+			return true;
+		}
+		if (isOverOreList(mouseX, mouseY)) {
+			oreScrollPx -= (int) Math.signum(scrollDelta) * ORE_SCROLL_STEP;
+			return true;
+		}
+		if (!isOverMap(mouseX, mouseY)) return false;
 		setZoom(zoomLevel + (scrollDelta > 0 ? 1 : -1), mouseX, mouseY);
 		return true;
 	}
@@ -2092,6 +2205,32 @@ public class ChunkMapScreen extends Screen {
 		dragScreenY = mouseY;
 		applyDragBox(mode == DragMode.SELECT_ADD);
 		return true;
+	}
+
+	/**
+	 * Escape climbs a ladder here too, just a one-rung one: an open overlay
+	 * eats the first press and closes itself rather than the whole map, the
+	 * same way a job's cancel ladder eats Escape presses before they reach
+	 * "close the screen" (see RegenProgressScreen, which is untouched by any
+	 * of this - it's a separate screen with its own ladder, and this method
+	 * never runs while one of its jobs is on screen). Only once nothing is
+	 * open does Escape fall through to actually closing the map.
+	 */
+	@Override
+	public void onClose() {
+		if (manipulationOverlay.isOpen()) {
+			manipulationOverlay.close();
+			return;
+		}
+		if (settingsOverlay.isOpen()) {
+			settingsOverlay.close();
+			return;
+		}
+		if (filterOpen) {
+			closeFilter();
+			return;
+		}
+		super.onClose();
 	}
 
 	@Override
