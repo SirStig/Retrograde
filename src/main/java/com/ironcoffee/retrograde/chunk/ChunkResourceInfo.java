@@ -112,7 +112,8 @@ public final class ChunkResourceInfo {
 		return biome.unwrapKey().map(key -> key.location()).orElse(null);
 	}
 
-	private static boolean isOre(BlockState state, Block block) {
+	/** Shared with SavedChunkReader, which tallies the same ores off the region file. */
+	static boolean isOre(BlockState state, Block block) {
 		for (TagKey<Block> tag : ORE_TAGS) {
 			if (state.is(tag)) return true;
 		}

@@ -39,10 +39,12 @@ public class NeoforgeClientEventSubscriber {
 		// that helper is deprecated in favor of this event on NeoForge.
 		var category = new KeyMapping.Category(ResourceLocation.fromNamespaceAndPath(Main.MOD_ID, "main"));
 		event.registerCategory(category);
-		// Unbound by default rather than picking a key ourselves - "M" is
-		// exactly the kind of key a minimap mod is likely to already own,
-		// and this mod has no way to know what else is installed. Player
-		// sets it themselves in Controls if they want it.
+		// O by default, and deliberately not a mnemonic one: every key that
+		// would stand for "map" is already contested. M and Y are minimap
+		// territory, J is JourneyMap, R and U belong to JEI, G to Curios, and
+		// JourneyMap takes the bracket keys for zoom on top of that. O has no
+		// vanilla binding and no popular mod I can find claiming it, which is
+		// worth more here than being memorable. Rebindable like anything else.
 		openChunkMapKey = new KeyMapping(
 			"key.retrograde.open_chunk_map",
 			KeyConflictContext.IN_GAME,
@@ -51,7 +53,7 @@ public class NeoforgeClientEventSubscriber {
 			//?} else {
 			/^InputConstants.Type.KEYBOARD,
 			^///?}
-			InputConstants.UNKNOWN.getValue(),
+			InputConstants.KEY_O,
 			category
 		);
 		event.register(openChunkMapKey);

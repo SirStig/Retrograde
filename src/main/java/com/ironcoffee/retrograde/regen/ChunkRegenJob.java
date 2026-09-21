@@ -50,6 +50,15 @@ public final class ChunkRegenJob {
 	private static final int UNLOAD_TIMEOUT_TICKS = 600;
 	/** Extra chunks beyond view distance to put between the player and the work area. */
 	private static final int STAGING_MARGIN_CHUNKS = 4;
+	/** pump() is driven by the progress screen's client tick, so a step is a tick. */
+	private static final int STEPS_PER_SECOND = 20;
+	/**
+	 * Move out, wait for the unload, move back. A guess, because the wait
+	 * depends on autosave timing - but a defensible one, and the alternative
+	 * is a preview screen that tells you a 20-chunk regen takes under a
+	 * second and then makes you watch a spinner for ten.
+	 */
+	private static final int STAGING_SECONDS = 6;
 
 	private static final Map<MinecraftServer, ChunkRegenJob> ACTIVE = new ConcurrentHashMap<>();
 
@@ -116,6 +125,20 @@ public final class ChunkRegenJob {
 
 	public static ChunkRegenJob active(MinecraftServer server) {
 		return ACTIVE.get(server);
+	}
+
+	/**
+	 * Roughly how long a job over this many chunks will run, for the preview
+	 * screen to quote before anyone commits to it. The pacing lives here
+	 * rather than in the screen because it's this class that decides it -
+	 * CHUNKS_PER_STEP chunks per pump(), one pump per client tick.
+	 */
+	public static int estimateSeconds(Mode mode, int chunkCount) {
+		int working = (int) Math.ceil(chunkCount / (double) (CHUNKS_PER_STEP * STEPS_PER_SECOND));
+		// Retrogen hands each chunk to another mod in place, so it skips the
+		// whole move-out-and-wait-for-unload dance that regen and undo need.
+		int staging = mode == Mode.RETROGEN ? 0 : STAGING_SECONDS;
+		return Math.max(1, working + staging);
 	}
 
 	/**

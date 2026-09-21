@@ -56,9 +56,17 @@ isn't tracked anywhere right now.
 ## Other known gaps
 
 - Retrogen wrapper only has Mekanism so far (see RetrogenIntegrations).
-- Map screen doesn't pan past the loaded radius around the player - would
-  need to read chunk data straight from the saved region file for
-  currently-unloaded chunks instead of live ChunkAccess.
+- SavedChunkReader decodes the on-disk chunk NBT by hand rather than
+  calling a vanilla deserializer, because the only shared entry point
+  across all six targets needs a PoiManager and has side effects. It reads
+  the packed block and biome palettes directly, which have been stable
+  since 1.18 (DataVersion 2825, which it checks) - but a future format
+  change is a thing to watch, and it would surface as a blank map for
+  unloaded chunks rather than as a crash.
+- The chunk filter can only search chunks the map has already read, since
+  nothing else has been looked inside. Searching a whole save would mean
+  walking every region file on disk, which wants a background index rather
+  than a GUI doing it inline.
 - Multiplayer isn't supported at all - the map screen and regen both go
   straight at the local integrated server.
 - Chunk jobs are driven by the progress screen's client tick, because there

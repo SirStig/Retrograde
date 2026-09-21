@@ -23,19 +23,20 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.Level;
+import net.minecraft.world.level.block.Block;
 
 import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Full-screen, pannable, zoomable chunk map, one texture per chunk (see
- * ChunkTerrainTextureCache) blitted at whatever scale the current zoom level
+ * ChunkMapDataCache) blitted at whatever scale the current zoom level
  * calls for - one draw call per chunk regardless of zoom.
  *
  * The interaction model is select-then-act, not click-to-act. Clicking a
@@ -127,6 +128,18 @@ public class ChunkMapScreen extends Screen {
 	private static final int ACTION_BUTTON_GAP = 4;
 	private static final int ACTION_BUTTONS = 4;
 
+	/**
+	 * The filter panel shares the slot to the right of the info panel with
+	 * the ore breakdown, so only one of the two is ever open - two floating
+	 * panels stacked on the same pixels would be unreadable, and both of
+	 * them are about the same thing anyway.
+	 */
+	private static final int FILTER_PANEL_WIDTH = 176;
+	private static final int FILTER_ROW_H = 18;
+	private static final int FILTER_ROW_GAP = 3;
+	/** How often the filter re-runs and re-derives its biome/ore choices, in ms. */
+	private static final long FILTER_REFRESH_MS = 400;
+
 	/** Cap on one selection, so nobody accidentally box-selects a continent. */
 	private static final int MAX_SELECTION = 256;
 	/** How long the panel keeps showing a one-off notice like the selection cap. */
@@ -137,7 +150,7 @@ public class ChunkMapScreen extends Screen {
 	private static final int COLOR_CHIP_BORDER_LIGHT = 0x40FFFFFF;
 	private static final int COLOR_CHIP_BORDER_DARK = 0x80000000;
 	private static final int COLOR_PENDING = 0xFF404040;
-	private static final int COLOR_UNLOADED = 0xFF303030;
+	private static final int COLOR_UNGENERATED = 0xFF303030;
 	private static final int COLOR_TOUCHED_TINT = 0x503D8B3D;
 	private static final int COLOR_PLAYER_TINT = 0x80E0C040;
 	private static final int COLOR_GRIDLINE = 0x50000000;
@@ -153,13 +166,23 @@ public class ChunkMapScreen extends Screen {
 	private static final int COLOR_MESSAGE_TEXT = 0xFFA0A0A0;
 	private static final int COLOR_DIVIDER = 0x30FFFFFF;
 	private static final int COLOR_NOTICE = 0xFFD8B24C;
+	// Amber rather than another blue: filter matches sit on the same map as
+	// the blue selection, and "found" and "selected" are different answers.
+	private static final int COLOR_MATCH_TINT = 0x55D8A03C;
+	private static final int COLOR_MATCH_EDGE = 0xFFF0C060;
 
-	private final ChunkTerrainTextureCache textureCache = new ChunkTerrainTextureCache();
-	private final Map<ChunkPos, Optional<ChunkResourceInfo.Inspection>> inspectionCache = new ConcurrentHashMap<>();
-	private final Set<ChunkPos> pendingInspections = ConcurrentHashMap.newKeySet();
+	private final ChunkMapDataCache dataCache = new ChunkMapDataCache();
 
 	/** Insertion-ordered so the job processes chunks in the order they were picked. */
 	private final Set<ChunkPos> selection = new LinkedHashSet<>();
+
+	/**
+	 * The selection as it was before the last thing that wiped or replaced
+	 * it, so "Restore" can put it back. Clear is one button away from Regen,
+	 * and a hand-picked selection is worth more than the one click it takes
+	 * to lose it.
+	 */
+	private List<ChunkPos> lastSelection = List.of();
 
 	private double cameraBlockX;
 	private double cameraBlockZ;
@@ -194,11 +217,45 @@ public class ChunkMapScreen extends Screen {
 	/** Whether the full ore breakdown is pinned open beside the info panel. */
 	private boolean oreListOpen;
 
+	// ----- chunk filter -----
+
+	/** Which chunks the filter is allowed to consider. */
+	private enum Scope { ON_SCREEN, RADIUS_4, RADIUS_8, RADIUS_16, MAPPED }
+
+	/** Whether the filter wants chunks you've been in, ones you haven't, or both. */
+	private enum Touched { ANY, YES, NO }
+
+	/** Whether the picked ore has to be present or absent. */
+	private enum OreRule { HAS, WITHOUT }
+
+	private boolean filterOpen;
+	private int filterX, filterY, filterH;
+	private Scope filterScope = Scope.ON_SCREEN;
+	private Touched filterTouched = Touched.ANY;
+	private OreRule filterOreRule = OreRule.HAS;
+	/** Both are -1 for "any", otherwise an index into the list below it. */
+	private int filterBiomeIndex = -1;
+	private int filterOreIndex = -1;
+	private List<ResourceLocation> biomeChoices = List.of();
+	private List<Block> oreChoices = List.of();
+	/** What currently matches. Highlighted on the map, and what "Select" acts on. */
+	private Set<ChunkPos> matches = Set.of();
+	private long filterRefreshedAt;
+
 	private Button regenButton;
 	private Button undoButton;
 	private Button retrogenButton;
 	private Button clearButton;
+	private Button findButton;
 	private Button oreToggle;
+	private Button filterScopeButton;
+	private Button filterTouchedButton;
+	private Button filterBiomeButton;
+	private Button filterOreButton;
+	private Button filterOreRuleButton;
+	private Button filterSelectButton;
+	private Button filterRestoreButton;
+	private Button filterCloseButton;
 
 	public ChunkMapScreen() {
 		super(Component.translatable("gui.retrograde.chunk_map.title"));
@@ -283,11 +340,70 @@ public class ChunkMapScreen extends Screen {
 		buttonY += ACTION_BUTTON_H + ACTION_BUTTON_GAP;
 		retrogenButton = addActionButton(buttonX, buttonY, buttonW, "gui.retrograde.chunk_map.action.retrogen",
 			"gui.retrograde.chunk_map.action.retrogen.tip", b -> beginRetrogen());
+		// Find and Clear share the last row at half width each, so adding the
+		// filter doesn't push the action panel taller than a 240px window.
 		buttonY += ACTION_BUTTON_H + ACTION_BUTTON_GAP;
-		clearButton = addActionButton(buttonX, buttonY, buttonW, "gui.retrograde.chunk_map.action.clear",
+		int halfW = (buttonW - ACTION_BUTTON_GAP) / 2;
+		findButton = addActionButton(buttonX, buttonY, halfW, "gui.retrograde.chunk_map.action.find",
+			"gui.retrograde.chunk_map.action.find.tip", b -> toggleFilter());
+		clearButton = addActionButton(buttonX + halfW + ACTION_BUTTON_GAP, buttonY,
+			buttonW - halfW - ACTION_BUTTON_GAP, "gui.retrograde.chunk_map.action.clear",
 			"gui.retrograde.chunk_map.action.clear.tip", b -> clearSelection());
 
+		initFilterPanel();
 		refreshSelectionStats();
+	}
+
+	/**
+	 * The filter's controls are real widgets rather than hand-drawn hit
+	 * boxes, so they get vanilla's hover and click feedback for free - but
+	 * that means they exist whether or not the panel is open, and are simply
+	 * hidden when it isn't.
+	 */
+	private void initFilterPanel() {
+		filterX = panelX + PANEL_WIDTH + ORE_PANEL_GAP;
+		filterY = infoPanelY;
+		int rowW = FILTER_PANEL_WIDTH - PANEL_PAD * 2;
+		int rowX = filterX + PANEL_PAD;
+		int y = filterY + PANEL_PAD + LINE_H + 2;
+
+		filterScopeButton = addFilterButton(rowX, y, rowW, "gui.retrograde.chunk_map.filter.scope.tip", b -> cycleScope());
+		y += FILTER_ROW_H + FILTER_ROW_GAP;
+		filterTouchedButton = addFilterButton(rowX, y, rowW, "gui.retrograde.chunk_map.filter.touched.tip", b -> cycleTouched());
+		y += FILTER_ROW_H + FILTER_ROW_GAP;
+		filterBiomeButton = addFilterButton(rowX, y, rowW, "gui.retrograde.chunk_map.filter.biome.tip", b -> cycleBiome());
+		y += FILTER_ROW_H + FILTER_ROW_GAP;
+		filterOreButton = addFilterButton(rowX, y, rowW, "gui.retrograde.chunk_map.filter.ore.tip", b -> cycleOre());
+		y += FILTER_ROW_H + FILTER_ROW_GAP;
+		filterOreRuleButton = addFilterButton(rowX, y, rowW, "gui.retrograde.chunk_map.filter.ore_rule.tip", b -> cycleOreRule());
+		y += FILTER_ROW_H + FILTER_ROW_GAP + LINE_H + 2;
+
+		filterSelectButton = addFilterButton(rowX, y, rowW, "gui.retrograde.chunk_map.filter.select.tip", b -> selectMatches());
+		y += FILTER_ROW_H + FILTER_ROW_GAP;
+		int half = (rowW - FILTER_ROW_GAP) / 2;
+		filterRestoreButton = addFilterButton(rowX, y, half, "gui.retrograde.chunk_map.filter.restore.tip", b -> restoreLastSelection());
+		filterCloseButton = addFilterButton(rowX + half + FILTER_ROW_GAP, y, rowW - half - FILTER_ROW_GAP,
+			"gui.retrograde.chunk_map.filter.close.tip", b -> toggleFilter());
+		y += FILTER_ROW_H;
+
+		filterH = y + PANEL_PAD - filterY;
+		// init() runs again on every window resize, so a panel that was open
+		// has to come back labelled rather than as a stack of blank buttons.
+		filterRefreshedAt = 0;
+		if (filterOpen) {
+			refreshFilter();
+		} else {
+			syncFilterButtons();
+		}
+	}
+
+	private Button addFilterButton(int x, int y, int w, String tooltipKey, Button.OnPress onPress) {
+		Button button = addRenderableWidget(Button.builder(Component.empty(), onPress)
+			.tooltip(Tooltip.create(Component.translatable(tooltipKey)))
+			.bounds(x, y, w, FILTER_ROW_H)
+			.build());
+		button.visible = false;
+		return button;
 	}
 
 	private Button addActionButton(int x, int y, int w, String labelKey, String tooltipKey, Button.OnPress onPress) {
@@ -311,7 +427,7 @@ public class ChunkMapScreen extends Screen {
 			handingOff = false;
 			return;
 		}
-		textureCache.close(minecraft);
+		dataCache.close(minecraft);
 	}
 
 	@Override
@@ -329,6 +445,12 @@ public class ChunkMapScreen extends Screen {
 				return;
 			}
 		}
+		// Off the tick rather than the frame: the map keeps reading chunks in
+		// while you sit here, so what matches changes under you, but not
+		// twenty times a frame and not for free.
+		if (filterOpen) {
+			refreshFilter();
+		}
 		syncActionButtons();
 	}
 
@@ -339,6 +461,9 @@ public class ChunkMapScreen extends Screen {
 		undoButton.setMessage(Component.translatable("gui.retrograde.chunk_map.action.undo", selectedUndoCount));
 		retrogenButton.setMessage(Component.translatable("gui.retrograde.chunk_map.action.retrogen", count));
 		clearButton.setMessage(Component.translatable("gui.retrograde.chunk_map.action.clear"));
+		findButton.setMessage(Component.translatable(filterOpen
+			? "gui.retrograde.chunk_map.action.find.close"
+			: "gui.retrograde.chunk_map.action.find"));
 		regenButton.active = any;
 		undoButton.active = selectedUndoCount > 0;
 		retrogenButton.active = any;
@@ -408,6 +533,7 @@ public class ChunkMapScreen extends Screen {
 		// chunk is in focus - so hovering it must not change what's in focus,
 		// or the list would rewrite itself out from under the cursor.
 		if (oreListOpen && isOverChip(mouseX, mouseY, oreListX, oreListY, ORE_PANEL_WIDTH, oreListH)) return false;
+		if (filterOpen && isOverChip(mouseX, mouseY, filterX, filterY, FILTER_PANEL_WIDTH, filterH)) return false;
 		return true;
 	}
 
@@ -491,19 +617,19 @@ public class ChunkMapScreen extends Screen {
 		ChunkPos playerChunk = playerChunk(player);
 
 		for (VisibleChunk chunk : computeVisibleChunks()) {
-			textureCache.request(minecraft, server, serverLevel, chunk.pos());
-			ChunkTerrainTextureCache.Status status = textureCache.statusOf(chunk.pos());
+			dataCache.request(minecraft, server, serverLevel, chunk.pos());
+			ChunkMapDataCache.Status status = dataCache.statusOf(chunk.pos());
 			int x1 = chunk.screenX();
 			int y1 = chunk.screenY();
 			int x2 = x1 + chunk.size();
 			int y2 = y1 + chunk.size();
 
-			if (status == ChunkTerrainTextureCache.Status.READY) {
-				ResourceLocation texture = textureCache.textureOf(chunk.pos());
+			if (status == ChunkMapDataCache.Status.READY) {
+				ResourceLocation texture = dataCache.textureOf(chunk.pos());
 				painter.chunkTexture(texture, x1, y1, chunk.size());
 			} else {
 				painter.fill(x1, y1, x2, y2,
-					status == ChunkTerrainTextureCache.Status.UNLOADED ? COLOR_UNLOADED : COLOR_PENDING);
+					status == ChunkMapDataCache.Status.UNGENERATED ? COLOR_UNGENERATED : COLOR_PENDING);
 			}
 
 			if (chunk.pos().equals(playerChunk)) {
@@ -515,6 +641,14 @@ public class ChunkMapScreen extends Screen {
 			if (chunk.size() >= CHUNK_BLOCKS) {
 				painter.fill(x1, y1, x2, y1 + 1, COLOR_GRIDLINE);
 				painter.fill(x1, y1, x1 + 1, y2, COLOR_GRIDLINE);
+			}
+
+			// Matches under the selection, not over it: once you've selected
+			// them the selection is the answer, and two overlapping tints on
+			// the same chunk read as a third colour that means nothing.
+			if (filterOpen && matches.contains(chunk.pos())) {
+				painter.fill(x1, y1, x2, y2, COLOR_MATCH_TINT);
+				painter.outline(x1, y1, chunk.size(), chunk.size(), COLOR_MATCH_EDGE);
 			}
 
 			if (selection.contains(chunk.pos())) {
@@ -538,6 +672,9 @@ public class ChunkMapScreen extends Screen {
 		}
 		drawInfoPanel(painter, server, dimension, tracker, playerChunk);
 		drawActionPanel(painter);
+		if (filterOpen) {
+			drawFilterPanel(painter);
+		}
 	}
 
 	private void drawDragBox(Painter painter) {
@@ -595,15 +732,13 @@ public class ChunkMapScreen extends Screen {
 		painter.text(font, Component.translatable(statusKey), textX + 8, y, statusColor);
 		y += LINE_H;
 
-		Optional<ChunkResourceInfo.Inspection> cached = requestInspection(server, dimension, pos);
-		ChunkResourceInfo.Inspection inspection = cached == null ? null : cached.orElse(null);
-
+		ChunkResourceInfo.Inspection inspection = dataCache.inspectionOf(pos);
 		if (inspection != null && inspection.biome() != null) {
 			painter.text(font, trimToPanel(biomeDisplayName(inspection.biome())), textX, y, COLOR_BIOME_TEXT);
-		} else if (cached == null) {
+		} else if (dataCache.statusOf(pos) == ChunkMapDataCache.Status.UNGENERATED) {
+			painter.text(font, Component.translatable("gui.retrograde.chunk_map.tooltip.not_generated"), textX, y, COLOR_MESSAGE_TEXT);
+		} else if (inspection == null) {
 			painter.text(font, Component.translatable("gui.retrograde.chunk_map.tooltip.loading"), textX, y, COLOR_MESSAGE_TEXT);
-		} else if (cached.isEmpty()) {
-			painter.text(font, Component.translatable("gui.retrograde.chunk_map.tooltip.not_loaded"), textX, y, COLOR_MESSAGE_TEXT);
 		}
 		y += LINE_H;
 
@@ -694,7 +829,271 @@ public class ChunkMapScreen extends Screen {
 	private void toggleOreList() {
 		oreListOpen = !oreListOpen;
 		if (!oreListOpen) oreListH = 0;
+		// Both live in the same slot beside the info panel, so opening one
+		// puts the other away rather than drawing on top of it.
+		if (oreListOpen && filterOpen) closeFilter();
 		oreToggle.setMessage(Component.literal(oreListOpen ? "«" : "»"));
+	}
+
+	// ----- chunk filter -----
+
+	private void toggleFilter() {
+		if (filterOpen) {
+			closeFilter();
+			return;
+		}
+		filterOpen = true;
+		if (oreListOpen) toggleOreList();
+		filterRefreshedAt = 0;
+		refreshFilter();
+		syncActionButtons();
+	}
+
+	private void closeFilter() {
+		filterOpen = false;
+		matches = Set.of();
+		syncFilterButtons();
+		syncActionButtons();
+	}
+
+	private void cycleScope() {
+		filterScope = next(Scope.values(), filterScope.ordinal());
+		refreshNow();
+	}
+
+	private void cycleTouched() {
+		filterTouched = next(Touched.values(), filterTouched.ordinal());
+		refreshNow();
+	}
+
+	private void cycleOreRule() {
+		filterOreRule = next(OreRule.values(), filterOreRule.ordinal());
+		refreshNow();
+	}
+
+	/** Steps through the choices derived from what's on the map, with "any" at the end. */
+	private void cycleBiome() {
+		filterBiomeIndex = filterBiomeIndex + 1 >= biomeChoices.size() ? -1 : filterBiomeIndex + 1;
+		refreshNow();
+	}
+
+	private void cycleOre() {
+		filterOreIndex = filterOreIndex + 1 >= oreChoices.size() ? -1 : filterOreIndex + 1;
+		refreshNow();
+	}
+
+	private static <T> T next(T[] values, int ordinal) {
+		return values[(ordinal + 1) % values.length];
+	}
+
+	/** Clicking a filter control should answer immediately, not on the next tick. */
+	private void refreshNow() {
+		filterRefreshedAt = 0;
+		refreshFilter();
+	}
+
+	/**
+	 * Re-runs the filter and re-derives the biome and ore choices from
+	 * whatever the map has read. Offering only what's actually out there
+	 * beats a text box: there's nothing to spell, nothing to guess at the
+	 * namespace of, and no way to land on a filter that can't match.
+	 */
+	private void refreshFilter() {
+		long now = System.currentTimeMillis();
+		if (now - filterRefreshedAt < FILTER_REFRESH_MS) return;
+		filterRefreshedAt = now;
+
+		MinecraftServer server = minecraft == null ? null : minecraft.getSingleplayerServer();
+		var player = minecraft == null ? null : minecraft.player;
+		if (server == null || player == null) {
+			matches = Set.of();
+			syncFilterButtons();
+			return;
+		}
+		ResourceKey<Level> dimension = player.level().dimension();
+		ChunkTracker tracker = ChunkTracker.forServer(server);
+
+		List<ChunkPos> candidates = filterCandidates(playerChunk(player));
+		refreshFilterChoices(candidates);
+
+		ResourceLocation biome = choice(biomeChoices, filterBiomeIndex);
+		Block ore = choice(oreChoices, filterOreIndex);
+
+		Set<ChunkPos> found = new LinkedHashSet<>();
+		for (ChunkPos pos : candidates) {
+			// A chunk the map hasn't read is one we can't answer for - it
+			// might be ungenerated, it might be full of diamond. Either way
+			// it doesn't belong in a set someone is about to regenerate.
+			if (dataCache.statusOf(pos) != ChunkMapDataCache.Status.READY) continue;
+			boolean touched = tracker.statusOf(dimension, pos) == ChunkTracker.Status.TOUCHED;
+			if (filterTouched == Touched.YES && !touched) continue;
+			if (filterTouched == Touched.NO && touched) continue;
+
+			ChunkResourceInfo.Inspection inspection = dataCache.inspectionOf(pos);
+			if (biome != null && (inspection == null || !biome.equals(inspection.biome()))) continue;
+			if (ore != null && hasOre(inspection, ore) != (filterOreRule == OreRule.HAS)) continue;
+			found.add(pos);
+		}
+		matches = found;
+		syncFilterButtons();
+	}
+
+	private static <T> T choice(List<T> choices, int index) {
+		return index >= 0 && index < choices.size() ? choices.get(index) : null;
+	}
+
+	private static boolean hasOre(ChunkResourceInfo.Inspection inspection, Block ore) {
+		if (inspection == null) return false;
+		for (ChunkResourceInfo.Entry entry : inspection.ores()) {
+			if (entry.block() == ore) return true;
+		}
+		return false;
+	}
+
+	/**
+	 * Ordered nearest-first, because the selection cap means a filter can
+	 * match more chunks than it's allowed to select - and when it does,
+	 * keeping the ones around you is a far better guess than keeping
+	 * whichever corner of the map happened to be iterated first.
+	 */
+	private List<ChunkPos> filterCandidates(ChunkPos center) {
+		List<ChunkPos> candidates = new ArrayList<>();
+		switch (filterScope) {
+			case ON_SCREEN -> {
+				for (VisibleChunk chunk : computeVisibleChunks()) candidates.add(chunk.pos());
+			}
+			case MAPPED -> candidates.addAll(dataCache.mappedChunks());
+			default -> {
+				int radius = filterRadius();
+				for (int cz = -radius; cz <= radius; cz++) {
+					for (int cx = -radius; cx <= radius; cx++) {
+						candidates.add(new ChunkPos(chunkX(center) + cx, chunkZ(center) + cz));
+					}
+				}
+			}
+		}
+		candidates.sort(Comparator.comparingLong(pos -> distanceSquared(center, pos)));
+		return candidates;
+	}
+
+	private int filterRadius() {
+		return switch (filterScope) {
+			case RADIUS_4 -> 4;
+			case RADIUS_8 -> 8;
+			default -> 16;
+		};
+	}
+
+	private static long distanceSquared(ChunkPos from, ChunkPos to) {
+		long dx = chunkX(to) - (long) chunkX(from);
+		long dz = chunkZ(to) - (long) chunkZ(from);
+		return dx * dx + dz * dz;
+	}
+
+	/** Keeps whatever was picked selected if it's still out there, rather than resetting to "any". */
+	private void refreshFilterChoices(List<ChunkPos> candidates) {
+		ResourceLocation keepBiome = choice(biomeChoices, filterBiomeIndex);
+		Block keepOre = choice(oreChoices, filterOreIndex);
+
+		Set<ResourceLocation> biomes = new LinkedHashSet<>();
+		Map<Block, String> ores = new LinkedHashMap<>();
+		for (ChunkPos pos : candidates) {
+			ChunkResourceInfo.Inspection inspection = dataCache.inspectionOf(pos);
+			if (inspection == null) continue;
+			if (inspection.biome() != null) biomes.add(inspection.biome());
+			for (ChunkResourceInfo.Entry entry : inspection.ores()) {
+				ores.computeIfAbsent(entry.block(), block -> new ItemStack(block).getHoverName().getString());
+			}
+		}
+
+		List<ResourceLocation> sortedBiomes = new ArrayList<>(biomes);
+		sortedBiomes.sort(Comparator.comparing(ChunkMapScreen::biomeDisplayName));
+		List<Block> sortedOres = new ArrayList<>(ores.keySet());
+		sortedOres.sort(Comparator.comparing(ores::get));
+
+		biomeChoices = sortedBiomes;
+		oreChoices = sortedOres;
+		filterBiomeIndex = keepBiome == null ? -1 : biomeChoices.indexOf(keepBiome);
+		filterOreIndex = keepOre == null ? -1 : oreChoices.indexOf(keepOre);
+	}
+
+	private void syncFilterButtons() {
+		for (Button button : List.of(filterScopeButton, filterTouchedButton, filterBiomeButton,
+				filterOreButton, filterOreRuleButton, filterSelectButton, filterRestoreButton, filterCloseButton)) {
+			button.visible = filterOpen;
+		}
+		if (!filterOpen) return;
+
+		filterScopeButton.setMessage(Component.translatable("gui.retrograde.chunk_map.filter.scope",
+			Component.translatable("gui.retrograde.chunk_map.filter.scope." + filterScope.name().toLowerCase(java.util.Locale.ROOT))));
+		filterTouchedButton.setMessage(Component.translatable("gui.retrograde.chunk_map.filter.touched",
+			Component.translatable("gui.retrograde.chunk_map.filter.touched." + filterTouched.name().toLowerCase(java.util.Locale.ROOT))));
+
+		ResourceLocation biome = choice(biomeChoices, filterBiomeIndex);
+		filterBiomeButton.setMessage(biome == null
+			? Component.translatable("gui.retrograde.chunk_map.filter.biome.any")
+			: Component.literal(trimTo(biomeDisplayName(biome), FILTER_PANEL_WIDTH - PANEL_PAD * 2 - 8)));
+		filterBiomeButton.active = !biomeChoices.isEmpty();
+
+		Block ore = choice(oreChoices, filterOreIndex);
+		filterOreButton.setMessage(ore == null
+			? Component.translatable("gui.retrograde.chunk_map.filter.ore.any")
+			: Component.literal(trimTo(new ItemStack(ore).getHoverName().getString(), FILTER_PANEL_WIDTH - PANEL_PAD * 2 - 8)));
+		filterOreButton.active = !oreChoices.isEmpty();
+
+		filterOreRuleButton.setMessage(Component.translatable("gui.retrograde.chunk_map.filter.ore_rule",
+			Component.translatable("gui.retrograde.chunk_map.filter.ore_rule." + filterOreRule.name().toLowerCase(java.util.Locale.ROOT))));
+		// The rule only says anything once an ore is picked; greying it out
+		// says so more plainly than leaving it live and inert.
+		filterOreRuleButton.active = ore != null;
+
+		filterSelectButton.setMessage(Component.translatable("gui.retrograde.chunk_map.filter.select", matches.size()));
+		filterSelectButton.active = !matches.isEmpty();
+		filterRestoreButton.setMessage(Component.translatable("gui.retrograde.chunk_map.filter.restore"));
+		filterRestoreButton.active = !lastSelection.isEmpty();
+		filterCloseButton.setMessage(Component.translatable("gui.retrograde.chunk_map.filter.close"));
+	}
+
+	private void drawFilterPanel(Painter painter) {
+		drawChip(painter, filterX, filterY, FILTER_PANEL_WIDTH, filterH);
+		int textX = filterX + PANEL_PAD;
+		painter.text(font, Component.translatable("gui.retrograde.chunk_map.filter.title"),
+			textX, filterY + PANEL_PAD, COLOR_HEADING);
+
+		// The count line sits in the gap between the five filter rows and the
+		// two action rows, which is the reason that gap is there.
+		int countY = filterSelectButton.getY() - LINE_H - 2;
+		Component count = matches.size() > MAX_SELECTION
+			? Component.translatable("gui.retrograde.chunk_map.filter.matches_capped", matches.size(), MAX_SELECTION)
+			: Component.translatable("gui.retrograde.chunk_map.filter.matches", matches.size());
+		painter.text(font, count, textX, countY, matches.isEmpty() ? COLOR_MESSAGE_TEXT : COLOR_MATCH_EDGE);
+	}
+
+	private void selectMatches() {
+		if (matches.isEmpty()) return;
+		rememberSelection();
+		for (ChunkPos pos : matches) {
+			if (!addToSelection(pos)) break;
+		}
+		refreshSelectionStats();
+	}
+
+	private void restoreLastSelection() {
+		if (lastSelection.isEmpty()) return;
+		List<ChunkPos> restoring = lastSelection;
+		rememberSelection();
+		selection.clear();
+		for (ChunkPos pos : restoring) {
+			if (!addToSelection(pos)) break;
+		}
+		refreshSelectionStats();
+	}
+
+	/** Snapshots the selection before something is about to overwrite it. */
+	private void rememberSelection() {
+		if (!selection.isEmpty()) {
+			lastSelection = List.copyOf(selection);
+		}
 	}
 
 	/** Fixed panel under the info panel: what's selected and what can be done to it. */
@@ -737,22 +1136,6 @@ public class ChunkMapScreen extends Screen {
 		*///?} else {
 		return new ChunkPos(player.blockPosition());
 		//?}
-	}
-
-	private Optional<ChunkResourceInfo.Inspection> requestInspection(MinecraftServer server, ResourceKey<Level> dimension, ChunkPos pos) {
-		Optional<ChunkResourceInfo.Inspection> cached = inspectionCache.get(pos);
-		if (cached != null) {
-			return cached;
-		}
-		if (pendingInspections.add(pos)) {
-			server.execute(() -> {
-				ServerLevel serverLevel = server.getLevel(dimension);
-				ChunkResourceInfo.Inspection result = serverLevel == null ? null : ChunkResourceInfo.scan(serverLevel, pos);
-				inspectionCache.put(pos, Optional.ofNullable(result));
-				pendingInspections.remove(pos);
-			});
-		}
-		return null;
 	}
 
 	private static int chunkX(ChunkPos pos) {
@@ -815,6 +1198,7 @@ public class ChunkMapScreen extends Screen {
 	}
 
 	private void clearSelection() {
+		rememberSelection();
 		selection.clear();
 		refreshSelectionStats();
 	}
@@ -866,17 +1250,53 @@ public class ChunkMapScreen extends Screen {
 
 	// ----- actions -----
 
+	/**
+	 * Regen goes through a preview rather than a yes/no dialog. A confirm
+	 * box can say "42 chunks" and nothing more; this is the one action in
+	 * the mod that destroys work, and the numbers that decide whether you
+	 * want it - how many you've built in, how many can be undone afterwards,
+	 * what ore is down there, how long you'll be sat watching - are all
+	 * knowable before it starts.
+	 */
 	private void beginRegen() {
 		if (selection.isEmpty()) return;
 		List<ChunkPos> targets = List.copyOf(selection);
-		int touched = selectedTouchedCount;
-		Component question = touched > 0
-			? Component.translatable("gui.retrograde.confirm_regen_touched", targets.size(), touched)
-			: Component.translatable("gui.retrograde.confirm_regen", targets.size());
-		Component detail = Component.translatable(touched > 0
-			? "gui.retrograde.confirm_regen_touched.detail"
-			: "gui.retrograde.confirm_regen.detail");
-		confirmThen(question, detail, () -> startJob(ChunkRegenJob.Mode.REGENERATE, targets, null));
+		openScreen(new RegenPreviewScreen(this, targets, selectedTouchedCount, selectedUndoCount,
+			aggregateOres(targets), unscannedCount(targets)));
+	}
+
+	/** Called by RegenPreviewScreen once the numbers have been looked at and accepted. */
+	public void startRegenJob(List<ChunkPos> targets) {
+		startJob(ChunkRegenJob.Mode.REGENERATE, targets, null);
+	}
+
+	/** Every ore across the selection, biggest total first. */
+	private List<ChunkResourceInfo.Entry> aggregateOres(List<ChunkPos> targets) {
+		Map<Block, Integer> tally = new LinkedHashMap<>();
+		for (ChunkPos pos : targets) {
+			ChunkResourceInfo.Inspection inspection = dataCache.inspectionOf(pos);
+			if (inspection == null) continue;
+			for (ChunkResourceInfo.Entry entry : inspection.ores()) {
+				tally.merge(entry.block(), entry.count(), Integer::sum);
+			}
+		}
+		List<ChunkResourceInfo.Entry> entries = new ArrayList<>();
+		tally.forEach((block, count) -> entries.add(new ChunkResourceInfo.Entry(block, count)));
+		entries.sort((a, b) -> b.count() - a.count());
+		return entries;
+	}
+
+	/**
+	 * How many of the targets the map never got a look inside. The ore
+	 * figures on the preview are a floor, not a total, whenever this isn't
+	 * zero - and saying so is better than quietly under-reporting.
+	 */
+	private int unscannedCount(List<ChunkPos> targets) {
+		int unscanned = 0;
+		for (ChunkPos pos : targets) {
+			if (dataCache.inspectionOf(pos) == null) unscanned++;
+		}
+		return unscanned;
 	}
 
 	private void beginUndo() {
@@ -941,8 +1361,7 @@ public class ChunkMapScreen extends Screen {
 	 */
 	public void onJobFinished(ChunkRegenJob job) {
 		for (ChunkPos pos : job.touchedByJob()) {
-			textureCache.invalidate(minecraft, pos);
-			inspectionCache.remove(pos);
+			dataCache.invalidate(minecraft, pos);
 		}
 		// Selection is deliberately kept: the most common thing to want right
 		// after a regen is to undo it.

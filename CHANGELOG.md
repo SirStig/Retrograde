@@ -48,3 +48,21 @@
   them
 - Fixed mouse buttons and arrow keys being wrong on 26.3, which moved its input
   backend from GLFW to SDL and renumbered both
+- The map reads unloaded chunks straight out of the region file, so it shows
+  everywhere you've explored instead of only the chunks the server currently
+  has in memory. Grey now means "nothing generated there", not "walk closer"
+- Biome and ore tally are cached alongside each chunk's terrain rather than
+  read separately on hover, so every chunk the map has drawn can also be
+  described - and searched
+- Added a chunk filter: pick a scope (on screen, within 4/8/16 of you, or
+  everywhere mapped), then narrow by touched/untouched, by biome, and by an
+  ore being present or absent. Matches are highlighted on the map as you
+  change the filter, with one button to select all of them
+- Added Restore, which puts back the selection as it was before the last thing
+  that replaced it - so clearing or overwriting a hand-picked selection is no
+  longer final
+- Regen now opens a preview instead of a yes/no dialog: chunk count, how many
+  you've built in, how many can be undone afterwards, an estimated runtime, and
+  the ore tallied across the whole selection
+- Map keybinding now defaults to O instead of being unbound, picked for not
+  colliding with the common minimap/JEI/Curios bindings
