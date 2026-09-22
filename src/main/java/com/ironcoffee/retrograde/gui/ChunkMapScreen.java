@@ -156,6 +156,13 @@ public class ChunkMapScreen extends Screen {
 	private static final int COLOR_TOUCHED_TINT = 0x503D8B3D;
 	private static final int COLOR_PLAYER_TINT = 0x80E0C040;
 	private static final int COLOR_GRIDLINE = 0x50000000;
+	/**
+	 * Floor for on-screen spacing between grid lines, in pixels. Below this
+	 * a line per chunk boundary is pure noise rather than anything readable,
+	 * so {@link #drawChunkGrid} thins to every Nth chunk instead of drawing
+	 * every boundary or, the old behaviour, none at all.
+	 */
+	private static final int MIN_GRID_SPACING_PX = 16;
 	private static final int COLOR_SELECTED_TINT = 0x553C7DD4;
 	private static final int COLOR_SELECTED_EDGE = 0xFF6FA8F0;
 	private static final int COLOR_BOX_FILL = 0x303C7DD4;
@@ -218,6 +225,19 @@ public class ChunkMapScreen extends Screen {
 	};
 
 	private final ChunkMapDataCache dataCache = new ChunkMapDataCache();
+
+	/**
+	 * Memoises {@link #isSlimeChunk}: it's a pure function of position and
+	 * world seed, both fixed for this screen's whole lifetime, but it runs a
+	 * WorldgenRandom seed-and-roll per call - not free when it was getting
+	 * called for every READY chunk on screen, every frame, at whatever zoom
+	 * put a few hundred thousand of them there. A plain HashMap is fine: this
+	 * only ever runs on the render thread.
+	 */
+	private final Map<ChunkPos, Boolean> slimeChunkCache = new java.util.HashMap<>();
+
+	/** Last time {@link ChunkMapDataCache#flushDirtyRegions} ran, so tick() only calls it every {@link ChunkMapDataCache#CACHE_FLUSH_INTERVAL_MS}. */
+	private long lastCacheFlushAt;
 
 	/** Insertion-ordered so the job processes chunks in the order they were picked. */
 	private final Set<ChunkPos> selection = new LinkedHashSet<>();
@@ -684,6 +704,15 @@ public class ChunkMapScreen extends Screen {
 		if (manipulationOverlay.isOpen()) {
 			manipulationOverlay.tick();
 		}
+
+		// Mirrors newly-read regions to disk periodically rather than only on
+		// close, so a crash mid-session loses at most this interval's worth
+		// of newly-explored terrain instead of the whole session's.
+		long now = System.currentTimeMillis();
+		if (now - lastCacheFlushAt >= ChunkMapDataCache.CACHE_FLUSH_INTERVAL_MS) {
+			lastCacheFlushAt = now;
+			dataCache.flushDirtyRegions();
+		}
 	}
 
 	private void syncActionButtons() {
@@ -781,27 +810,91 @@ public class ChunkMapScreen extends Screen {
 		return new ChunkPos(Math.floorDiv(blockX, CHUNK_BLOCKS), Math.floorDiv(blockZ, CHUNK_BLOCKS));
 	}
 
-	private record VisibleChunk(ChunkPos pos, int screenX, int screenY, int size) {}
+	/**
+	 * The chunk-coordinate range currently on screen, with a one-chunk
+	 * overscan on every side. Deliberately just four ints rather than a list
+	 * of per-chunk records: at a low enough zoom this range can cover several
+	 * hundred thousand chunks, and materialising a {@code VisibleChunk} object
+	 * (plus the list to hold it) for every one of them, every single frame,
+	 * was real GC pressure on top of - and independent from - whatever it
+	 * cost to draw them. Every caller that used to iterate a list of these
+	 * now iterates the bounds directly with a plain nested loop instead.
+	 */
+	private record VisibleBounds(int minChunkX, int maxChunkX, int minChunkZ, int maxChunkZ) {}
 
-	private List<VisibleChunk> computeVisibleChunks() {
-		double ppb = pixelsPerBlock();
-		int chunkPixelSize = Math.max(1, (int) Math.round(CHUNK_BLOCKS * ppb));
-
+	private VisibleBounds computeVisibleBounds() {
 		int minChunkX = Math.floorDiv((int) Math.floor(screenToBlockX(0)), CHUNK_BLOCKS) - 1;
 		int maxChunkX = Math.floorDiv((int) Math.ceil(screenToBlockX(width)), CHUNK_BLOCKS) + 1;
 		int minChunkZ = Math.floorDiv((int) Math.floor(screenToBlockZ(0)), CHUNK_BLOCKS) - 1;
 		int maxChunkZ = Math.floorDiv((int) Math.ceil(screenToBlockZ(height)), CHUNK_BLOCKS) + 1;
+		return new VisibleBounds(minChunkX, maxChunkX, minChunkZ, maxChunkZ);
+	}
 
-		List<VisibleChunk> result = new ArrayList<>();
-		for (int cz = minChunkZ; cz <= maxChunkZ; cz++) {
-			for (int cx = minChunkX; cx <= maxChunkX; cx++) {
-				ChunkPos pos = new ChunkPos(cx, cz);
-				int sx = (int) Math.round(blockToScreenX(cx * (double) CHUNK_BLOCKS));
-				int sy = (int) Math.round(blockToScreenY(cz * (double) CHUNK_BLOCKS));
-				result.add(new VisibleChunk(pos, sx, sy, chunkPixelSize));
+	/** Current on-screen size of one chunk, in pixels - uniform across the whole frame regardless of how many chunks that is. */
+	private int currentChunkPixelSize() {
+		return Math.max(1, (int) Math.round(CHUNK_BLOCKS * pixelsPerBlock()));
+	}
+
+	/**
+	 * Terrain-mode background pass: blits each region atlas that overlaps
+	 * the screen once, before the per-chunk loop draws anything else over
+	 * it - see ChunkMapDataCache's class doc for why chunks share a texture
+	 * per {@value ChunkMapDataCache#REGION_CHUNK_SPAN}x{@value
+	 * ChunkMapDataCache#REGION_CHUNK_SPAN} region instead of each getting
+	 * their own. A region with nothing read into it yet is simply skipped -
+	 * the per-chunk loop's PENDING/UNGENERATED fills cover that whole area
+	 * on their own once it gets there.
+	 */
+	private void drawRegionTextures(Painter painter, VisibleBounds bounds) {
+		int regionBlocks = ChunkMapDataCache.REGION_CHUNK_SPAN * CHUNK_BLOCKS;
+		int minRegionX = Math.floorDiv(bounds.minChunkX(), ChunkMapDataCache.REGION_CHUNK_SPAN);
+		int maxRegionX = Math.floorDiv(bounds.maxChunkX(), ChunkMapDataCache.REGION_CHUNK_SPAN);
+		int minRegionZ = Math.floorDiv(bounds.minChunkZ(), ChunkMapDataCache.REGION_CHUNK_SPAN);
+		int maxRegionZ = Math.floorDiv(bounds.maxChunkZ(), ChunkMapDataCache.REGION_CHUNK_SPAN);
+
+		for (int rz = minRegionZ; rz <= maxRegionZ; rz++) {
+			for (int rx = minRegionX; rx <= maxRegionX; rx++) {
+				ResourceLocation texture = dataCache.regionTexture(new ChunkMapDataCache.RegionPos(rx, rz));
+				if (texture == null) continue;
+				int sx = (int) Math.round(blockToScreenX(rx * (double) regionBlocks));
+				int sy = (int) Math.round(blockToScreenY(rz * (double) regionBlocks));
+				int size = Math.max(1, (int) Math.round(regionBlocks * pixelsPerBlock()));
+				painter.regionTexture(texture, sx, sy, size, size, ChunkMapDataCache.REGION_TEXTURE_PIXELS);
 			}
 		}
-		return result;
+	}
+
+	/**
+	 * Chunk boundary grid, drawn as lines spanning the whole screen rather
+	 * than a border per chunk. The old per-chunk version stopped drawing
+	 * anything below zoom level 0, because at that point the lines it was
+	 * drawing would have landed less than a pixel apart - so the grid didn't
+	 * thin out, it just vanished the moment you zoomed out past being able
+	 * to make out individual chunks. This keeps real screen-space spacing
+	 * between lines instead, by thinning to every Nth chunk boundary as the
+	 * zoom drops, so there's always a legible grid rather than none at all.
+	 */
+	private void drawChunkGrid(Painter painter) {
+		int chunkPx = Math.max(1, (int) Math.round(CHUNK_BLOCKS * pixelsPerBlock()));
+		int stride = 1;
+		while (chunkPx * stride < MIN_GRID_SPACING_PX) stride *= 2;
+		int strideBlocks = CHUNK_BLOCKS * stride;
+
+		long firstX = Math.floorDiv((long) Math.floor(screenToBlockX(0)), strideBlocks) * strideBlocks;
+		long lastX = Math.floorDiv((long) Math.ceil(screenToBlockX(width)), strideBlocks) * strideBlocks + strideBlocks;
+		for (long blockX = firstX; blockX <= lastX; blockX += strideBlocks) {
+			int sx = (int) Math.round(blockToScreenX(blockX));
+			if (sx < -1 || sx > width + 1) continue;
+			painter.fill(sx, 0, sx + 1, height, COLOR_GRIDLINE);
+		}
+
+		long firstZ = Math.floorDiv((long) Math.floor(screenToBlockZ(0)), strideBlocks) * strideBlocks;
+		long lastZ = Math.floorDiv((long) Math.ceil(screenToBlockZ(height)), strideBlocks) * strideBlocks + strideBlocks;
+		for (long blockZ = firstZ; blockZ <= lastZ; blockZ += strideBlocks) {
+			int sy = (int) Math.round(blockToScreenY(blockZ));
+			if (sy < -1 || sy > height + 1) continue;
+			painter.fill(0, sy, width, sy + 1, COLOR_GRIDLINE);
+		}
 	}
 
 	// Screen's own render entry point is the one thing that genuinely differs
@@ -889,84 +982,141 @@ public class ChunkMapScreen extends Screen {
 		boolean slimeChunks = RetrogradeConfig.showSlimeChunks() && isOverworld(dimension);
 		long worldSeed = serverLevel.getSeed();
 
-		List<VisibleChunk> visible = computeVisibleChunks();
+		VisibleBounds bounds = computeVisibleBounds();
+		int chunkPixelSize = currentChunkPixelSize();
 		if (mapMode == MapMode.ORES) {
-			oreScaleMax = highestOreCount(visible);
+			oreScaleMax = highestOreCount(bounds);
 		}
 
-		for (VisibleChunk chunk : visible) {
-			dataCache.request(minecraft, server, serverLevel, chunk.pos());
-			ChunkMapDataCache.Status status = dataCache.statusOf(chunk.pos());
-			int x1 = chunk.screenX();
-			int y1 = chunk.screenY();
-			int x2 = x1 + chunk.size();
-			int y2 = y1 + chunk.size();
+		// Only Terrain mode ever draws a chunk's colour, so only Terrain mode
+		// needs to have read one - biome/ore/touched all paint a flat colour
+		// off the (much cheaper) inspection alone. Requesting a texture read
+		// for a chunk no mode was going to show a texture for was previously
+		// paying the terrain sample's full height-map walk on every visible
+		// chunk regardless of what the map was actually displaying.
+		boolean wantTexture = mapMode == MapMode.TERRAIN;
+		if (wantTexture) {
+			// One blit per region atlas that overlaps the screen, drawn
+			// before the per-chunk loop so everything else - tints, grid,
+			// selection - layers on top of it exactly like it did over the
+			// old per-chunk blits.
+			drawRegionTextures(painter, bounds);
+		}
 
-			if (status == ChunkMapDataCache.Status.UNGENERATED) {
-				// Same grey in every mode. Nothing generated there, so there's
-				// no biome to colour and no ore to count - saying so once,
-				// consistently, beats four different ways to say "no data".
-				painter.fill(x1, y1, x2, y2, COLOR_UNGENERATED);
-			} else if (status != ChunkMapDataCache.Status.READY) {
-				painter.fill(x1, y1, x2, y2, COLOR_PENDING);
-			} else if (mapMode == MapMode.TERRAIN) {
-				painter.chunkTexture(dataCache.textureOf(chunk.pos()), x1, y1, chunk.size());
-			} else {
-				painter.fill(x1, y1, x2, y2, modeColor(chunk.pos(), dimension, tracker));
-			}
+		// Below this on-screen chunk size, drawing (and requesting) every
+		// single chunk is the actual bottleneck, not anything about how
+		// cheaply each one draws: a monitor-filling view at max zoom-out can
+		// put several hundred thousand chunks in this loop, and even a
+		// handful of hashmap lookups apiece adds up to whole frames of CPU
+		// time before a single pixel goes out. The region atlas already
+		// draws the real terrain at full resolution regardless (see
+		// drawRegionTextures above) - all this loop still does per chunk is
+		// decide whether something needs to be drawn OVER that, which is
+		// exactly the kind of decision nobody can actually see the precision
+		// of at a handful of screen pixels per chunk. So below that size, walk
+		// NxN chunks at a time and use one corner chunk to represent the
+		// whole cell instead of checking every one - a few pixels of
+		// imprecision right at a cell's generated/ungenerated edge, for a
+		// game console back from being unplayably slow while zoomed out.
+		int cellChunks = 1;
+		while (chunkPixelSize * cellChunks < MIN_GRID_SPACING_PX) cellChunks *= 2;
+		int cellPixelSize = chunkPixelSize * cellChunks;
 
-			// Player tint answers "where am I", not "what's in this chunk" - an
-			// orientation marker rather than a data overlay - so it draws
-			// regardless of status. In practice the chunk you're standing in
-			// is never UNGENERATED, but it is briefly PENDING (map just
-			// opened, or you stepped into a chunk the cache hasn't sampled
-			// yet), and losing your own position marker for that one frame
-			// would be worse than a flat-grey square wearing a yellow tint.
-			if (chunk.pos().equals(playerChunk)) {
-				painter.fill(x1, y1, x2, y2, COLOR_PLAYER_TINT);
-			} else if (status == ChunkMapDataCache.Status.READY && mapMode != MapMode.TOUCHED
-				&& tracker.statusOf(dimension, chunk.pos()) == ChunkTracker.Status.TOUCHED) {
-				// Skipped in TOUCHED mode: the fill underneath already says it,
-				// and a wash over half the squares in a two-colour map is noise.
-				// Gated on READY otherwise: touched-or-not describes what's in
-				// the chunk, same as slime below, and a green wash over a grey
-				// "nothing here yet" or "still loading" square reads as broken
-				// rather than as information.
-				painter.fill(x1, y1, x2, y2, COLOR_TOUCHED_TINT);
-			}
+		for (int cz = bounds.minChunkZ(); cz <= bounds.maxChunkZ(); cz += cellChunks) {
+			int y1 = (int) Math.round(blockToScreenY(cz * (double) CHUNK_BLOCKS));
+			int y2 = y1 + cellPixelSize;
+			for (int cx = bounds.minChunkX(); cx <= bounds.maxChunkX(); cx += cellChunks) {
+				ChunkPos pos = new ChunkPos(cx, cz);
+				int x1 = (int) Math.round(blockToScreenX(cx * (double) CHUNK_BLOCKS));
+				int x2 = x1 + cellPixelSize;
 
-			// Under the grid lines and everything interactive, because this is
-			// a property of the coordinates rather than anything you did or
-			// selected - it should read as part of the terrain, not as state.
-			// Gated on READY: the slime pattern is knowable from the seed
-			// alone without reading the chunk, but painting it over an
-			// UNGENERATED or PENDING square dresses up a placeholder as real
-			// information, which is the exact bug this whole fix is for.
-			if (status == ChunkMapDataCache.Status.READY && slimeChunks && isSlimeChunk(worldSeed, chunk.pos())) {
-				painter.fill(x1, y1, x2, y2, COLOR_SLIME_TINT);
-				if (chunk.size() >= CHUNK_BLOCKS) {
-					painter.outline(x1, y1, chunk.size(), chunk.size(), COLOR_SLIME_EDGE);
+				dataCache.request(minecraft, server, serverLevel, pos, wantTexture);
+				ChunkMapDataCache.Status status = dataCache.statusOf(pos);
+
+				if (mapMode == MapMode.TERRAIN && dataCache.hasCachedVisual(pos)) {
+					// Already painted by drawRegionTextures() above - whether
+					// from a verified read this session or a prior session's
+					// disk cache. Checked ahead of PENDING/UNGENERATED on
+					// purpose: this chunk's *confirmed* status may still be
+					// catching up in the background (the request just above
+					// is exactly that), but a picture already on screen beats
+					// flashing a grey square over it while that confirmation
+					// lands - the whole point of caching it in the first
+					// place. Once the real status is in, this same spot gets
+					// repainted with the confirmed pixels regardless.
+				} else if (status == ChunkMapDataCache.Status.UNGENERATED) {
+					// Same grey in every mode. Nothing generated there, so there's
+					// no biome to colour and no ore to count - saying so once,
+					// consistently, beats four different ways to say "no data".
+					painter.fill(x1, y1, x2, y2, COLOR_UNGENERATED);
+				} else if (status != ChunkMapDataCache.Status.READY) {
+					painter.fill(x1, y1, x2, y2, COLOR_PENDING);
+				} else if (mapMode == MapMode.TERRAIN) {
+					// Status is READY (verified this session) but hasCachedVisual
+					// was false above - shouldn't happen since a verified texture
+					// always sets its own cached-visual bit, but stay safe.
+					painter.fill(x1, y1, x2, y2, COLOR_PENDING);
+				} else {
+					painter.fill(x1, y1, x2, y2, modeColor(pos, dimension, tracker));
+				}
+
+				// Player tint answers "where am I", not "what's in this chunk" - an
+				// orientation marker rather than a data overlay - so it draws
+				// regardless of status. In practice the chunk you're standing in
+				// is never UNGENERATED, but it is briefly PENDING (map just
+				// opened, or you stepped into a chunk the cache hasn't sampled
+				// yet), and losing your own position marker for that one frame
+				// would be worse than a flat-grey square wearing a yellow tint.
+				//
+				// Checked against the whole cell, not just its representative
+				// corner: cellChunks is usually 1, but when it isn't, the
+				// player is only the cell's exact top-left corner one time in
+				// cellChunks^2 - anywhere else in that same cell and an exact
+				// pos.equals(playerChunk) would make the marker vanish outright
+				// while zoomed out instead of just losing a pixel of precision.
+				boolean playerInCell = chunkX(playerChunk) >= cx && chunkX(playerChunk) < cx + cellChunks
+					&& chunkZ(playerChunk) >= cz && chunkZ(playerChunk) < cz + cellChunks;
+				if (playerInCell) {
+					painter.fill(x1, y1, x2, y2, COLOR_PLAYER_TINT);
+				} else if (status == ChunkMapDataCache.Status.READY && mapMode != MapMode.TOUCHED
+					&& tracker.statusOf(dimension, pos) == ChunkTracker.Status.TOUCHED) {
+					// Skipped in TOUCHED mode: the fill underneath already says it,
+					// and a wash over half the squares in a two-colour map is noise.
+					// Gated on READY otherwise: touched-or-not describes what's in
+					// the chunk, same as slime below, and a green wash over a grey
+					// "nothing here yet" or "still loading" square reads as broken
+					// rather than as information.
+					painter.fill(x1, y1, x2, y2, COLOR_TOUCHED_TINT);
+				}
+
+				// Under the grid lines and everything interactive, because this is
+				// a property of the coordinates rather than anything you did or
+				// selected - it should read as part of the terrain, not as state.
+				// Gated on READY: the slime pattern is knowable from the seed
+				// alone without reading the chunk, but painting it over an
+				// UNGENERATED or PENDING square dresses up a placeholder as real
+				// information, which is the exact bug this whole fix is for.
+				if (status == ChunkMapDataCache.Status.READY && slimeChunks && isSlimeChunkCached(worldSeed, pos)) {
+					painter.fill(x1, y1, x2, y2, COLOR_SLIME_TINT);
+					if (cellPixelSize >= CHUNK_BLOCKS) {
+						painter.outline(x1, y1, cellPixelSize, cellPixelSize, COLOR_SLIME_EDGE);
+					}
 				}
 			}
-
-			if (chunk.size() >= CHUNK_BLOCKS) {
-				painter.fill(x1, y1, x2, y1 + 1, COLOR_GRIDLINE);
-				painter.fill(x1, y1, x1 + 1, y2, COLOR_GRIDLINE);
-			}
-
-			// Matches under the selection, not over it: once you've selected
-			// them the selection is the answer, and two overlapping tints on
-			// the same chunk read as a third colour that means nothing.
-			if (filterOpen && matches.contains(chunk.pos())) {
-				painter.fill(x1, y1, x2, y2, COLOR_MATCH_TINT);
-				painter.outline(x1, y1, chunk.size(), chunk.size(), COLOR_MATCH_EDGE);
-			}
-
-			if (selection.contains(chunk.pos())) {
-				painter.fill(x1, y1, x2, y2, COLOR_SELECTED_TINT);
-				painter.outline(x1, y1, chunk.size(), chunk.size(), COLOR_SELECTED_EDGE);
-			}
 		}
+
+		// Selection and matches are drawn from their own (small, capped) sets
+		// rather than as a per-visible-chunk membership check above: checking
+		// "is this one of the 256 selected chunks" against every chunk on
+		// screen costs the same whether the screen shows a hundred chunks or
+		// half a million, and unlike the coarsening above there's no reason
+		// to ever blur these - the sets themselves are cheap to walk exactly.
+		if (filterOpen) {
+			drawSparseOverlay(painter, bounds, matches, COLOR_MATCH_TINT, COLOR_MATCH_EDGE);
+		}
+		drawSparseOverlay(painter, bounds, selection, COLOR_SELECTED_TINT, COLOR_SELECTED_EDGE);
+
+		drawChunkGrid(painter);
 
 		if (dragMode == DragMode.SELECT_ADD || dragMode == DragMode.SELECT_REMOVE) {
 			drawDragBox(painter);
@@ -993,6 +1143,29 @@ public class ChunkMapScreen extends Screen {
 		}
 		if (settingsOverlay.isOpen()) {
 			settingsOverlay.draw(painter, mouseX, mouseY);
+		}
+	}
+
+	/**
+	 * Tints every chunk in {@code positions} that's currently on screen.
+	 * Used for selection and filter matches instead of a membership check
+	 * per visible chunk (see the call site in {@link #draw}): both sets are
+	 * small - selection capped at {@value #MAX_SELECTION}, matches whatever
+	 * the filter actually found - so walking them directly costs the same
+	 * whether the screen shows a hundred chunks or half a million, unlike a
+	 * {@code positions.contains(pos)} check repeated once per visible chunk.
+	 */
+	private void drawSparseOverlay(Painter painter, VisibleBounds bounds, Set<ChunkPos> positions, int fillColor, int edgeColor) {
+		if (positions.isEmpty()) return;
+		int chunkPixelSize = currentChunkPixelSize();
+		for (ChunkPos pos : positions) {
+			int cx = chunkX(pos);
+			int cz = chunkZ(pos);
+			if (cx < bounds.minChunkX() || cx > bounds.maxChunkX() || cz < bounds.minChunkZ() || cz > bounds.maxChunkZ()) continue;
+			int x1 = (int) Math.round(blockToScreenX(cx * (double) CHUNK_BLOCKS));
+			int y1 = (int) Math.round(blockToScreenY(cz * (double) CHUNK_BLOCKS));
+			painter.fill(x1, y1, x1 + chunkPixelSize, y1 + chunkPixelSize, fillColor);
+			painter.outline(x1, y1, chunkPixelSize, chunkPixelSize, edgeColor);
 		}
 	}
 
@@ -1040,12 +1213,15 @@ public class ChunkMapScreen extends Screen {
 		}
 	}
 
-	private int highestOreCount(List<VisibleChunk> visible) {
+	private int highestOreCount(VisibleBounds bounds) {
 		int max = 1;
-		for (VisibleChunk chunk : visible) {
-			if (dataCache.statusOf(chunk.pos()) != ChunkMapDataCache.Status.READY) continue;
-			ChunkResourceInfo.Inspection inspection = dataCache.inspectionOf(chunk.pos());
-			if (inspection != null) max = Math.max(max, totalOres(inspection));
+		for (int cz = bounds.minChunkZ(); cz <= bounds.maxChunkZ(); cz++) {
+			for (int cx = bounds.minChunkX(); cx <= bounds.maxChunkX(); cx++) {
+				ChunkPos pos = new ChunkPos(cx, cz);
+				if (dataCache.statusOf(pos) != ChunkMapDataCache.Status.READY) continue;
+				ChunkResourceInfo.Inspection inspection = dataCache.inspectionOf(pos);
+				if (inspection != null) max = Math.max(max, totalOres(inspection));
+			}
 		}
 		return max;
 	}
@@ -1432,7 +1608,12 @@ public class ChunkMapScreen extends Screen {
 		List<ChunkPos> candidates = new ArrayList<>();
 		switch (filterScope) {
 			case ON_SCREEN -> {
-				for (VisibleChunk chunk : computeVisibleChunks()) candidates.add(chunk.pos());
+				VisibleBounds bounds = computeVisibleBounds();
+				for (int cz = bounds.minChunkZ(); cz <= bounds.maxChunkZ(); cz++) {
+					for (int cx = bounds.minChunkX(); cx <= bounds.maxChunkX(); cx++) {
+						candidates.add(new ChunkPos(cx, cz));
+					}
+				}
 			}
 			case MAPPED -> candidates.addAll(dataCache.mappedChunks());
 			default -> {
@@ -1876,6 +2057,15 @@ public class ChunkMapScreen extends Screen {
 		return net.minecraft.world.level.levelgen.WorldgenRandom
 			.seedSlimeChunk(chunkX(pos), chunkZ(pos), worldSeed, 987234911L)
 			.nextInt(10) == 0;
+	}
+
+	/** Cached wrapper around {@link #isSlimeChunk} - see {@link #slimeChunkCache}. */
+	private boolean isSlimeChunkCached(long worldSeed, ChunkPos pos) {
+		Boolean cached = slimeChunkCache.get(pos);
+		if (cached != null) return cached;
+		boolean result = isSlimeChunk(worldSeed, pos);
+		slimeChunkCache.put(pos, result);
+		return result;
 	}
 
 	private static boolean isOverworld(ResourceKey<Level> dimension) {

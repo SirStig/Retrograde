@@ -104,6 +104,22 @@ final class Painter {
 		*///?}
 	}
 
+	/**
+	 * A whole region-atlas texture (see ChunkMapDataCache), scaled to
+	 * whatever screen rectangle its chunks currently map to - one blit for
+	 * however many chunks that region holds, rather than one per chunk.
+	 * {@code textureSize} is the atlas's own pixel width/height (it's
+	 * square), used for the UV extent on pre-26; 26.x addresses by fraction
+	 * so the atlas size never enters into it.
+	 */
+	void regionTexture(ResourceLocation texture, int x, int y, int w, int h, int textureSize) {
+		//? if <26 {
+		graphics.blit(texture, x, y, w, h, 0.0F, 0.0F, textureSize, textureSize, textureSize, textureSize);
+		//?} else {
+		/*graphics.blit(texture, x, y, x + w, y + h, 0.0F, 1.0F, 0.0F, 1.0F);
+		*///?}
+	}
+
 	// Everything below is built out of fill() alone, so it's shared.
 
 	/** Filled box with a light top/left and dark bottom/right edge. */

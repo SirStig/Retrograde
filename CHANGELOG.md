@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.1.1-beta
+
+Performance rework for the chunk map, aimed squarely at large explored worlds
+and low zoom levels, where it was previously close to unusable.
+
+- Terrain no longer gets a unique GPU texture per chunk. Chunks now share one
+  texture per 16x16 region, the same approach other chunk-grid map mods use,
+  so the map's draw-call count scales with screen area instead of with how
+  small zooming out has made an individual chunk.
+- The map's rendered terrain is now mirrored to a small per-region cache file
+  under the world's save folder, so reopening the map (or a previous
+  session's explored area) shows a picture immediately instead of re-reading
+  and re-decoding every chunk from scratch. Chunk status used for filtering
+  and regen targeting is never taken from this cache — only ever from a read
+  verified in the current session.
+- Non-terrain modes (biome, ore density, visited) no longer pay for a terrain
+  read at all, since they never displayed one.
+- The chunk grid no longer disappears below zoom level 0 — it now thins to
+  wider spacing instead of vanishing, so chunk boundaries stay visible at
+  every zoom.
+- At extreme zoom-out, the map now groups chunks into small blocks for
+  overlay decisions (pending/ungenerated shading, visited/slime tint)
+  instead of recomputing every individual chunk's state every frame -
+  several hundred thousand chunks on screen no longer means several hundred
+  thousand hashmap lookups a frame. Selection and filter-match highlighting
+  no longer scale with how many chunks are on screen at all.
+
 ## 0.1.0-beta
 
 First release. Singleplayer only.
